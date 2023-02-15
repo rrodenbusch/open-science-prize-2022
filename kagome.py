@@ -45,6 +45,19 @@ def create_lattice(numNodes,edges):
     # Make a Lattice from the graph
     return Lattice(graph)
 
+def degeneracy(list1,precision=6):
+    unique_list  = []
+    unique_count = {}
+    for x1 in list1:
+        x = np.around(x1,precision)
+        # check if exists in unique_list or not
+        if x not in unique_list:
+            unique_list.append(x)
+            unique_count[x] = 1
+        else:
+            unique_count[x] += 1
+    return unique_list, unique_count
+
 def draw_lattice(lattice,positions=None,
                  with_labels=True,font_color='white',
                  node_color='purple'):
@@ -194,7 +207,9 @@ def SparsePauliPrint(pauli,label='Sparse Pauli'):
         print(f"{cnt}:\t{curItem[0]} * {curItem[1]}")
     print("\n")
 
-
+""" ################################################################
+        Class and utilities to run kagomeVQE data trials
+    ################################################################ """
 from qiskit.algorithms import MinimumEigensolver, VQEResult
 from qiskit.providers import JobError
 from qiskit_ibm_runtime.exceptions import (
@@ -215,7 +230,7 @@ _doneJobs    = [JobStatus.CANCELLED, JobStatus.DONE, JobStatus.ERROR, ]
 
 # Define a custome VQE class to orchestra the ansatz, classical optimizers,
 # initial point, callback, and final result
-class CustomVQE(MinimumEigensolver):
+class KagomeVQE(MinimumEigensolver):
 
     def __init__(self, estimator, circuit, optimizer, timeout=120, target=None,
                 label=None):
@@ -388,23 +403,38 @@ class CustomVQE(MinimumEigensolver):
         self._result = result
         return result
 
-def list_results(result):
-    results = result
-    if not isinstance(results,list):
-        results = [result]
+
+""" ################################################################
+             Manage the data generated for each test run
+    ################################################################ """
+def list_results(data_cache):
+    """ Display overview of result data cache
+            Args:
+                data_cache [list | KagomeVQE] : Data cache (or list of)
+            Returns:
+            Raises:
+    """
+    results = data_cache
+    if not isinstance(data_cache,list):
+        results = [data_cache]
     for idx in range(len(results)):
-        custom_vqe = results[idx]
-        print(f"{idx}: {custom_vqe.list_result()}")
+        kagomeVQE = results[idx]
+        print(f"{idx}: {kagomeVQE.list_result()}")
     print("\n")
 
-# def load_customVQE(fname):
 def load_results(fname):
+    """ Save a copy of the results data cache
+            Args:
+                fname (str): filename with data data
+            Returns:
+            Raises:
+    """
     import os.path
     results = []
     if os.path.isfile(fname):
         dict_results = load_object(fname)
         for curDict in dict_results:
-            curVQE = CustomVQE(None,None,None)
+            curVQE = KagomeVQE(None,None,None)
             curVQE.from_dict(curDict)
             results.append(curVQE)
     else:
@@ -412,16 +442,31 @@ def load_results(fname):
     print(f"Loaded {len(results)} results from {fname}")
     return results
 
-def save_results(obj,fname):
+def save_results(data_cache,fname):
+    """ Save a copy of the results data cache
+            Args:
+                data_cache [list | KagomeVQE ]
+                fname (str): filename to save data to
+            Returns:
+            Raises:
+    """
     results = []
-    if not isinstance(obj,list):
-        obj = [obj]
-    for curObj in obj:
+    if not isinstance(data_cache,list):
+        data_cache = [data_cache]
+    for curObj in data_cache:
         results.append(curObj.to_dict())
     # save the list
     save_object(results,fname)
 
-#  ---- Create a custom callback function for SPSA optimizer ---- #
+
+""" ################################################################
+   ---------------------- SPSA callback setup ----------------------
+    Allocate and manage global data structure for SPSA direct callback
+        _SPSA_callback_data : list
+        SPSA_callback() : function for SPSA to callback
+        get_SPSA_callback(): return a copy of the current callback data
+        init_SPSA_callback(): clear the callback data cache
+    ################################################################ """
 _SPSA_callback_data = []
 def SPSA_callback(nFuncs, x, Fx, stepSize, accepted):
     step_data = {}
@@ -433,12 +478,87 @@ def SPSA_callback(nFuncs, x, Fx, stepSize, accepted):
     _SPSA_callback_data.append(step_data)
 
 def get_SPSA_callback():
+    """ Return copy of SPSA callback data cache
+            Args:
+            Returns:
+                list: Copy of current callback data
+            Raises:
+    """
     return _SPSA_callback_data.copy()
 
 def init_SPSA_callback():
+    """ Clear SPSA callback data cache
+            Args:
+            Returns:
+            Raises:
+    """
     _SPSA_callback_data.clear()
 
-def runCustomVQE(H, ansatz, optimizer, timeout=120, x0=None, target = None,
+def plot_SPSA_callback(obj,prec=8):
+    label = 'No Label'
+    target = None
+    if isinstance(obj,list):
+        spsa_data = obj
+    else:
+        label = obj._label
+        target = obj._target
+        spsa_data = obj.SPSA_callback_data
+        if spsa_data is None or len(spsa_data) == 0:
+            print("No SPSA Callback Data Available")
+            return
+        eigenvalue = obj._result.eigenvalue
+        print(f'Computed ground state energy: {eigenvalue:.10f}')
+
+    if spsa_data is None or len(spsa_data) == 0:
+        print(f"No spsa_data found")
+        return
+
+    Xdata, Fdata, accepts = parse_SPSA_callback(spsa_data)
+    print(f"Minimum computed n={np.argmin(Fdata)} {np.around(min(Fdata),prec)}")
+
+    print(f"kept={np.around(100*accepts[0]/(accepts[0]+accepts[1]),1)}% n={len(Fdata)}  rejects={accepts[1]}")
+
+
+    plt.title(label)
+    plt.plot(Fdata, color='purple', lw=2)
+    plt.ylabel('Energy')
+    plt.xlabel('Iterations')
+    if target is not None:
+        rel_error = abs((target - eigenvalue) / target)
+        print(f'Expected ground state energy: {target:.10f}')
+        print(f'Relative error: {np.around(100*rel_error,8)}%')
+        plt.axhline(y=target, color="tab:red", ls="--", lw=2,
+                    label="Target: " + str(target))
+    else:
+        plt.axhline(y=eigenvalue, color="tab:red", ls="--", lw=2, label="Target: None" )
+    plt.legend()
+    plt.grid()
+    plt.show()
+
+
+def parse_SPSA_callback(spsa_data):
+    # Flatten the data for plotting
+    (Fx,xvals,steps,accept,nF,Xdata,Fdata,Sdata,Ndata) = ([],[],[],[],[],[],[],[],[])
+    accepts = [0,0]
+    for curData in spsa_data:
+        Fx.append(curData['Fx'])
+        xvals.append(curData['x'])
+        steps.append(curData['stepSize'])
+        accept.append(curData['accepted'])
+        nF.append(curData['n'])
+        if curData['accepted']:
+            Xdata.append(curData['x'])
+            Fdata.append(curData['Fx'])
+            Sdata.append(curData['stepSize'])
+            Ndata.append(curData['n'])
+            accepts[0] += 1
+        else:
+            accepts[1] += 1
+
+    return Xdata, Fdata, accepts
+
+
+def run_kagomeVQE(H, ansatz, optimizer, timeout=120, x0=None, target = None,
                  resultsList=None, service=None, backend=None, label=None,
                  miniAnsatz=None):
     """ Run the eigenvalue search
@@ -455,11 +575,11 @@ def runCustomVQE(H, ansatz, optimizer, timeout=120, x0=None, target = None,
                 label (str): Initial label
                 miniAnsatz (QuantumCircuit): ansatz without any ancillary qubits
             Returns:
-                CustomVQE: Custom class with results
+                KagomeVQE: Custom class with results
             Raises:
     """
     if label is None:
-        label = "CustomVQE"
+        label = "KagomeVQE"
     if resultsList is not None:
         label += f" {len(resultsList)}"
     init_SPSA_callback()
@@ -470,9 +590,9 @@ def runCustomVQE(H, ansatz, optimizer, timeout=120, x0=None, target = None,
         estimator = Estimator([ansatz], [H])
         label += f" Local {optimizer.__class__.__name__}"
         print(label)
-        custom_vqe = CustomVQE(estimator, ansatz, optimizer,
+        kagomeVQE = KagomeVQE(estimator, ansatz, optimizer,
                                timeout=None, target=target, label=label)
-        result = custom_vqe.compute_minimum_eigenvalue(H,x0=x0)
+        result = kagomeVQE.compute_minimum_eigenvalue(H,x0=x0)
     else:
         from qiskit_ibm_runtime import Session, Estimator as RuntimeEstimator
         # estimator = RuntimeEstimator(session=session)
@@ -480,39 +600,21 @@ def runCustomVQE(H, ansatz, optimizer, timeout=120, x0=None, target = None,
             label += f" {backend} {optimizer.__class__.__name__}"
             print(label)
             estimator = RuntimeEstimator(session=session)
-            custom_vqe = CustomVQE(estimator, ansatz, optimizer,
+            kagomeVQE = KagomeVQE(estimator, ansatz, optimizer,
                                    timeout=timeout, target=target, label=label)
-            result = custom_vqe.compute_minimum_eigenvalue(H,x0=x0)
+            result = kagomeVQE.compute_minimum_eigenvalue(H,x0=x0)
 
     if resultsList is not None:
-        resultsList.append(custom_vqe)
+        resultsList.append(kagomeVQE)
 
     if miniAnsatz is not None:
-        custom_vqe.set_attr('miniAnsatz', miniAnsatz)
+        kagomeVQE.set_attr('miniAnsatz', miniAnsatz)
 
-    custom_vqe.set_attr('SPSA_callback_data',get_SPSA_callback())
-    custom_vqe.set_attr('H',H)
+    kagomeVQE.set_attr('SPSA_callback_data',get_SPSA_callback())
+    kagomeVQE.set_attr('H',H)
 
     print(f"Runtime {formatDuration(result.optimizer_time)}")
-    return custom_vqe
-
-
-
-
-
-""" Unknown if those below need to be included or not """
-
-
-def print_dists(points,nPoints):
-    def dist(a,b,digits=5):
-        a=np.array(a)
-        b=np.array(b)
-        return np.around(np.linalg.norm(a-b),digits)
-    for i in range(nPoints):
-        for j in range(i+1,nPoints):
-            print(f"dist({i},{j}) = {dist(points[i],points[j])}")
-
-
+    return kagomeVQE
 
 
 def mytime():
@@ -539,97 +641,6 @@ def strtime(epoch=None):
     if epoch is None:
         epoch = mytime()
     return(f"{asctime(gmtime(epoch))} UTC")
-
-def sort_lists(xarr,yarr):
-    """ sort_lists
-            Sort two lists based on first list
-        Args:
-            xarr (list): X array, list which determines sort oder
-            yarr (list): Y array, list to be sorted with xarr
-        Returns:
-            tuple: sortedX, sortedY arrays
-        Raises:
-    """
-    xarr = np.array(xarr)
-    yarr = np.array(yarr)
-    indices = xarr.argsort()
-    sortX = xarr[indices]
-    sortY = yarr[indices]
-    return sortX, sortY
-
-def combine_datasets(xvals, yvals):
-    """ combine_datasets
-            Combine multiple x,y data sets into a single sorted list
-        Args:
-            xvals (list): List of x arrays
-            yvals (list): List of y arrays
-        Returns:
-            tuple: sortedX, sortedY arrays
-        Raises:
-    """
-    if len(xvals) != len(yvals):
-        return None
-    xarr = []
-    yarr = []
-    for idx in range(len(xvals)):
-        xarr.extend(xvals[idx])
-        yarr.extend(yvals[idx])
-    xarr = np.array(xarr)
-    yarr = np.array(yarr)
-    indices = xarr.argsort()
-    sortX = xarr[indices]
-    sortY = yarr[indices]
-    return sortX, sortY
-
-def classlookup(cls,indent=''):
-    """ classlookup
-            Return the class hierarchy for all base classses of class
-
-        Args:
-            cls (class): The class to lookup
-            indent (str): The string to preprend to all new lines in the lookup
-
-        Returns:
-            str: The formatted string
-        Raises:
-        Examples:
-    """
-    c = list(cls.__bases__)
-    cstr = []
-    if indent == '':
-        cstr = [cls.__name__]
-    indent = indent + '    '
-    for base in c:
-        astr = classlookup(base,indent=indent)
-        if astr is not None:
-            cstr.append(f"{indent}{base.__name__}")
-            cstr.append(astr)
-    return cstr
-
-def list2str(obj):
-    """ list2str
-            Format a list into a printable string
-
-        Args:
-            obj (list): Object to be parsed
-            name (str): Name of object to insert into string
-            indent (str): The string to preprend to all new lines in the lookup
-
-        Returns:
-            str: The formatted string
-        Raises:
-        Examples:
-    """
-    if isinstance(obj,list):
-        if len(obj) > 0:
-            for cstr in obj:
-                if isinstance(cstr,list):
-                    if len(cstr) > 0:
-                        list2str(cstr)
-                elif cstr is not None:
-                    print(cstr)
-    elif obj is not None:
-        print(obj)
 
 if __name__ == "__main__":
     verstr = getVersion(output=True)
