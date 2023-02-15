@@ -231,18 +231,26 @@ class CustomVQE(MinimumEigensolver):
 
     def __init__(self, estimator, circuit, optimizer, timeout=120, target=None,
                 label=None):
-        self._estimator     = estimator
-        self._circuit       = circuit
-        self._optimizer     = optimizer
-        self._timeout       = timeout
-        self._target        = target
-        self._callback_data = []
-        self._result        = None
-        self._initial_point = None
-        self._label         = label
+        self._estimator       = estimator
+        self._circuit         = circuit
+        self._optimizer       = optimizer
+        self._timeout         = timeout
+        self._target          = target
+        self._callback_data   = []
+        self._callback_points = []
+        self._result          = None
+        self._initial_point   = None
+        self._label           = label
+        self.attrs            = {}
 
     def _callback(self, value):
         self._callback_data.append(value)
+
+    def set_attr(self,key,value):
+        self.attrs[key] = value
+
+    def get_attr(self, key, default=None):
+        return self.attrs.get(key,default)
 
     @property
     def callback_data(self):
@@ -339,11 +347,15 @@ class CustomVQE(MinimumEigensolver):
             value = job_result.values[0]
             # Save result information
             self._callback_data.append(value)
+            self._callback_points.append(x)
             return value
 
         # Select an initial point for the ansatzs' parameters
         if x0 is None:
             x0 = np.pi/4 * np.random.rand(self._circuit.num_parameters)
+        elif isinstance(x0,int) and (x0 == 0):
+            x0 = np.zeros(self._circuit.num_parameters)
+
         self._initial_point = x0
 
         result = VQEResult()
@@ -404,8 +416,42 @@ def save_customVQE(obj,fname):
     else:
         obj._estimator = estimators[0]
 
+_SPSA_callback_data = []
+def SPSA_callback(nFuncs, x, Fx, stepSize, accepted):
+    step_data = {}
+    step_data['n'] = nFuncs
+    step_data['x'] = x
+    step_data['Fx'] = Fx
+    step_data['stepSize'] = stepSize
+    step_data['accepted'] = accepted
+    _SPSA_callback_data.append(step_data)
+
+def getSPSA_callback():
+    return _SPSA_callback_data.copy()
+
+def initSPSA_callback():
+    _SPSA_callback_data.clear()
+
 def runCustomVQE(H, ansatz, optimizer, timeout=120, x0=None, target = None,
-                 resultsList=None, service=None, backend=None, label=None):
+                 resultsList=None, service=None, backend=None, label=None,
+                 miniAnsatz=None):
+    """ Run the eigenvalue search
+            Args:
+                H (SparsePauliSum): The Hamiltonian
+                ansatz (QuantumCircuit):  Ansatz for the search
+                optmizer (func): Chosen opmtimization routine
+                timeout (int): Results wait timeout
+                x0 (np.array): initial parameters
+                target (float): Minimum eigenvalue (for labeling and err estimates)
+                resultsList (list): TBD
+                service (Service): Service to use for runtime execution
+                backend (Union[str, Backend]): Backend to use for runtime exections
+                label (str): Initial label
+                miniAnsatz (QuantumCircuit): ansatz without any ancillary qubits
+            Returns:
+                CustomVQE: Custom class with results
+            Raises:
+    """
     if label is None:
         label = "CustomVQE"
     if resultsList is not None:
@@ -422,7 +468,7 @@ def runCustomVQE(H, ansatz, optimizer, timeout=120, x0=None, target = None,
         result = custom_vqe.compute_minimum_eigenvalue(H,x0=x0)
     else:
         from qiskit_ibm_runtime import Session, Estimator as RuntimeEstimator
-
+        estimator = RuntimeEstimator(session=session)
         with Session(service=service, backend=backend) as session:
             label += f" {backend} {optimizer.__class__.__name__}"
             print(label)
@@ -433,6 +479,11 @@ def runCustomVQE(H, ansatz, optimizer, timeout=120, x0=None, target = None,
 
     if resultsList is not None:
         resultsList.append(custom_vqe)
+
+    if miniAnsatz is not None:
+        custom_vqe.set_attr('miniAnsatz', miniAnsatz)
+
+    custom_vqe.set_attr('H',H)
 
     print(f"Runtime {formatDuration(result.optimizer_time)}")
     return custom_vqe
