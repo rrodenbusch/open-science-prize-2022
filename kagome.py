@@ -14,7 +14,6 @@
 
 @author: rrodenbusch
 """
-
 import sys
 import pandas
 import subprocess
@@ -30,25 +29,10 @@ version_info="myTools(major=1, minor=1, micro=0)"
 
 
 def getVersion(output=True):
-    myversion=f"Python: {str(sys.version_info)}\nmyTools: {version_info}\n"
+    myversion=f"Python: {str(sys.version_info)}\nkagome: {version_info}\n"
     if output:
         print(myversion)
-
     return(myversion)
-
-
-def around(point,nbits=5):
-    """Truncate to nbits decimal places
-
-        Args:
-            point (float): input value
-            nbits (int): number of decimal places
-            backend (Backend): The backend properties dictionary
-        Returns:
-            float: Truncated value
-    """
-    import numpy as np
-    return np.around(point,nbits)
 
 def create_lattice(numNodes,edges):
     # Generate graph of kagome unit cell
@@ -70,6 +54,21 @@ def draw_lattice(lattice,positions=None,
         style['pos']=positions
     image = lattice.draw(style=style)
     return image
+
+def formatDuration(duration):
+    days    = divmod(duration, 86400)        # Get days (without [0]!)
+    hours   = divmod(days[1], 3600)          # Use remainder of days to calc hours
+    minutes = divmod(hours[1], 60)           # Use remainder of hours to calc minutes
+    msg = ''
+    if int(days[0]) > 0:
+        msg += f"{int(days[0])} days, {int(hours[0])} hours, {int(minutes[0])} min"
+    elif int(hours[0]) > 0:
+        msg += f"{int(hours[0])} hours, {int(minutes[0])} min"
+    elif int(minutes[0]) > 0:
+        msg += f"{int(minutes[0])} min, {int(minutes[1])} sec"
+    else:
+        msg += f"{np.around(minutes[1],5)} sec"
+    return msg
 
 def get_hamiltonian(lattice,spin_interaction=1.0,global_potential=0.0):
     from heisenberg_model import HeisenbergModel
@@ -130,8 +129,6 @@ def init_notebook(output=True):
 
     return(kVersion)
 
-
-
 def iter2str(obj,name: str = None,indent: int = 4) -> str:
     """ iter2str
             Format an iterable into a printable string
@@ -178,6 +175,16 @@ def iter2str(obj,name: str = None,indent: int = 4) -> str:
 
     return iter_str
 
+def load_object(fname):
+    import pickle
+    with open(fname, 'rb') as obj_file:
+        obj = pickle.load(obj_file)
+    return obj
+
+def save_object(obj,fname):
+    import pickle
+    with open(fname, 'wb') as obj_file:
+        pickle.dump(obj, obj_file)
 
 def SparsePauliPrint(pauli,label='Sparse Pauli'):
     cnt=0
@@ -187,32 +194,6 @@ def SparsePauliPrint(pauli,label='Sparse Pauli'):
         print(f"{cnt}:\t{curItem[0]} * {curItem[1]}")
     print("\n")
 
-
-def save_object(obj,fname):
-    import pickle
-    with open(fname, 'wb') as obj_file:
-        pickle.dump(obj, obj_file)
-
-def load_object(fname):
-    import pickle
-    with open(fname, 'rb') as obj_file:
-        obj = pickle.load(obj_file)
-    return obj
-
-def formatDuration(duration):
-    days    = divmod(duration, 86400)        # Get days (without [0]!)
-    hours   = divmod(days[1], 3600)          # Use remainder of days to calc hours
-    minutes = divmod(hours[1], 60)           # Use remainder of hours to calc minutes
-    msg = ''
-    if int(days[0]) > 0:
-        msg += f"{int(days[0])} days, {int(hours[0])} hours, {int(minutes[0])} min"
-    elif int(hours[0]) > 0:
-        msg += f"{int(hours[0])} hours, {int(minutes[0])} min"
-    elif int(minutes[0]) > 0:
-        msg += f"{int(minutes[0])} min, {int(minutes[1])} sec"
-    else:
-        msg += f"{np.around(minutes[1],5)} sec"
-    return msg
 
 from qiskit.algorithms import MinimumEigensolver, VQEResult
 from qiskit.providers import JobError
@@ -243,6 +224,26 @@ class CustomVQE(MinimumEigensolver):
         self._label           = label
         self.attrs            = {}
 
+    def to_dict(self):
+        myData = {}
+        myData['_result']           = self._result
+        myData['_label']            = self._label
+        myData['_initial_point']    = self._initial_point
+        myData['_callback_data']    = self._callback_data
+        myData['_callback_points']  = self._callback_points
+        myData['_target']           = self._target
+        myData['attrs']             = self.attrs
+        return myData
+
+    def from_dict(self,myData):
+        self._result            = myData.get('_result',None)
+        self._label             = myData.get('_label',None)
+        self._initial_point     = myData.get('_initial_point',None)
+        self._callback_data     = myData.get('_callback_data',None)
+        self._callback_points   = myData.get('_callback_points',None)
+        self._target            = myData.get('_target',None)
+        self.attrs              = myData.get('attrs',None)
+
     def _callback(self, value):
         self._callback_data.append(value)
 
@@ -251,6 +252,10 @@ class CustomVQE(MinimumEigensolver):
 
     def get_attr(self, key, default=None):
         return self.attrs.get(key,default)
+
+    @property
+    def SPSA_callback_data(self):
+        return self.get_attr('SPSA_callback_data', None)
 
     @property
     def callback_data(self):
@@ -385,37 +390,31 @@ def list_results(result):
         print(f"{idx}: {custom_vqe.list_result()}")
     print("\n")
 
-def load_customVQE(fname):
+# def load_customVQE(fname):
+def load_results(fname):
     import os.path
+    results = []
     if os.path.isfile(fname):
-        results = load_object(fname)
+        dict_results = load_object(fname)
+        for curDict in dict_results:
+            curVQE = CustomVQE(None,None,None)
+            curVQE.from_dict(curDict)
+            results.append(curVQE)
     else:
         print(f"File not found.")
-
-        results = []
-    print(f"Loaded {len(results)} results")
+    print(f"Loaded {len(results)} results from {fname}")
     return results
 
-def save_customVQE(obj,fname):
-    estimators = []
-    objList = obj
+def save_results(obj,fname):
+    results = []
     if not isinstance(obj,list):
-        objList = [obj]
-    # runtime estimator causes recursion error on load
-    for curObj in objList:
-        estimators.append(curObj._estimator)
-        curObj._estimator = None
-
+        obj = [obj]
+    for curObj in obj:
+        results.append(curObj.to_dict())
     # save the list
-    save_object(objList,fname)
+    save_object(results,fname)
 
-    # restore the estimator
-    if isinstance(obj,list):
-        for idx in range(len(estimators)):
-            obj[idx]._estimator = estimators[idx]
-    else:
-        obj._estimator = estimators[0]
-
+#  ---- Create a custom callback function for SPSA optimizer ---- #
 _SPSA_callback_data = []
 def SPSA_callback(nFuncs, x, Fx, stepSize, accepted):
     step_data = {}
@@ -426,10 +425,10 @@ def SPSA_callback(nFuncs, x, Fx, stepSize, accepted):
     step_data['accepted'] = accepted
     _SPSA_callback_data.append(step_data)
 
-def getSPSA_callback():
+def get_SPSA_callback():
     return _SPSA_callback_data.copy()
 
-def initSPSA_callback():
+def init_SPSA_callback():
     _SPSA_callback_data.clear()
 
 def runCustomVQE(H, ansatz, optimizer, timeout=120, x0=None, target = None,
@@ -456,6 +455,7 @@ def runCustomVQE(H, ansatz, optimizer, timeout=120, x0=None, target = None,
         label = "CustomVQE"
     if resultsList is not None:
         label += f" {len(resultsList)}"
+    init_SPSA_callback()
 
     if backend is None:
         from qiskit.primitives import Estimator
@@ -468,7 +468,7 @@ def runCustomVQE(H, ansatz, optimizer, timeout=120, x0=None, target = None,
         result = custom_vqe.compute_minimum_eigenvalue(H,x0=x0)
     else:
         from qiskit_ibm_runtime import Session, Estimator as RuntimeEstimator
-        estimator = RuntimeEstimator(session=session)
+        # estimator = RuntimeEstimator(session=session)
         with Session(service=service, backend=backend) as session:
             label += f" {backend} {optimizer.__class__.__name__}"
             print(label)
@@ -483,6 +483,7 @@ def runCustomVQE(H, ansatz, optimizer, timeout=120, x0=None, target = None,
     if miniAnsatz is not None:
         custom_vqe.set_attr('miniAnsatz', miniAnsatz)
 
+    custom_vqe.set_attr('SPSA_callback_data',get_SPSA_callback())
     custom_vqe.set_attr('H',H)
 
     print(f"Runtime {formatDuration(result.optimizer_time)}")
@@ -531,27 +532,6 @@ def strtime(epoch=None):
     if epoch is None:
         epoch = mytime()
     return(f"{asctime(gmtime(epoch))} UTC")
-
-def listDir(docDir):
-    availfiles = subprocess.run( ["ls","",docDir], capture_output = True)
-    filelist = availfiles.stdout.decode()
-    lines      = filelist.splitlines()
-    dirName    = lines.pop(0)
-    print(dirName)
-    for x in lines:
-        print("   ",x)
-
-def printnl(S):
-    """ printnl
-            Print a string wihtout a newline character
-        Args:
-            S (str): The string to print
-        Returns:
-            String: The formatted string
-        Raises:
-    """
-    print(S,end="")
-
 
 def sort_lists(xarr,yarr):
     """ sort_lists
@@ -619,7 +599,6 @@ def classlookup(cls,indent=''):
             cstr.append(astr)
     return cstr
 
-
 def list2str(obj):
     """ list2str
             Format a list into a printable string
@@ -644,53 +623,6 @@ def list2str(obj):
                     print(cstr)
     elif obj is not None:
         print(obj)
-
-
-def helloWorld():
-    print( "Hello World")
-
-
-def read_from_file(fname):
-    lines = []
-    with open(fname,'r') as f:
-        lines.append(f.read())
-    return lines
-
-def save_object(obj,fname):
-    import pickle
-    with open(fname, 'wb') as obj_file:
-        pickle.dump(obj, obj_file)
-
-def load_object(fname):
-    import pickle
-    with open(fname, 'rb') as obj_file:
-        obj = pickle.load(obj_file)
-    return obj
-
-def append_to_file(fname,line,timestamp=False):
-    from os import getcwd
-    if not isinstance(line,str):
-        line=str(line)
-    if timestamp:
-        from time import time
-        epoch = str(int(time()))
-        line = f"{epoch},{line}"
-    with open(fname,'a+') as f:
-        f.write(line)
-    return getcwd()
-
-def write_to_file(fname,line,timestamp=False):
-    from os import getcwd
-    if not isinstance(line,str):
-        line=str(line)
-    if timestamp:
-        from time import time
-        epoch = str(int(time()))
-        line = f"{epoch},{line}"
-
-    with open(fname,'w') as f:
-        f.write(line)
-    return getcwd()
 
 if __name__ == "__main__":
     verstr = getVersion(output=True)
