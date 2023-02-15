@@ -197,6 +197,13 @@ def SparsePauliPrint(pauli,label='Sparse Pauli'):
 
 from qiskit.algorithms import MinimumEigensolver, VQEResult
 from qiskit.providers import JobError
+from qiskit_ibm_runtime.exceptions import (
+    RuntimeJobFailureError,
+    RuntimeInvalidStateError,
+    IBMRuntimeError,
+    RuntimeJobTimeoutError,
+    RuntimeJobMaxTimeoutError,
+)
 import numpy as np
 import matplotlib.pyplot as plt
 from qiskit.providers.jobstatus import JobStatus
@@ -340,7 +347,7 @@ class CustomVQE(MinimumEigensolver):
                     else:
                         job_result = job.result()
 
-                except JobError as ex:
+                except (JobError, RuntimeJobTimeoutError) as ex:
                     print(f"Job:{jobId} Try:{try_count} Status:{job_status} T:{time()-start}sec")
                     print(f"Job {jobId} Try {try_count} Error {ex}")
                     if try_count < 2:
