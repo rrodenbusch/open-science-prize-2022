@@ -45,6 +45,33 @@ def create_lattice(numNodes,edges):
     # Make a Lattice from the graph
     return Lattice(graph)
 
+def compute_eigenvalues(hams,k=64,force=False, prev_results=None):
+    from qiskit.algorithms import NumPyEigensolver
+    if prev_results is None:
+        prev_results = {}
+    for key,H in hams.items():
+        degen_list = ''
+        curEigenvalues = prev_results.get(key,None)
+        if force or (curEigenvalues is None):
+            print(f"Computing eigenvalues for {key}")
+            prev_results[key]  = NumPyEigensolver(k=k).compute_eigenvalues(H)
+    return(prev_results)
+
+def list_eigenvalues(eigData,cells):
+    if not isinstance(eigData,dict):
+        eigData = {'input':eigData}
+    targets={}
+    for key, result in eigData.items():
+        targets[key] = result.eigenvalues[0]
+        degen_list = ''
+        unq_value, unq_counts = degeneracy(result.eigenvalues)
+        for eig in unq_value:
+            degen = unq_counts[eig]
+            degen_list += f"\n\t{np.around(eig,4):8.4f}:[{degen}]"
+        print(f"\nH{key}: Edges {len(cells[key].weighted_edge_list)} "
+              f"Eigenvalues {len(result.eigenvalues)} {degen_list}")
+    return targets
+
 def degeneracy(list1,precision=6):
     unique_list  = []
     unique_count = {}
@@ -494,7 +521,8 @@ def init_SPSA_callback():
     """
     _SPSA_callback_data.clear()
 
-def plot_SPSA_callback(obj,prec=8):
+
+def plot_SPSA_convergence(obj,prec=6,slope=False,step=True,percent=True):
     label = 'No Label'
     target = None
     if isinstance(obj,list):
@@ -506,41 +534,70 @@ def plot_SPSA_callback(obj,prec=8):
         if spsa_data is None or len(spsa_data) == 0:
             print("No SPSA Callback Data Available")
             return
-        eigenvalue = obj._result.eigenvalue
-        print(f'Computed ground state energy: {eigenvalue:.10f}')
 
     if spsa_data is None or len(spsa_data) == 0:
         print(f"No spsa_data found")
         return
 
-    Xdata, Fdata, accepts = parse_SPSA_callback(spsa_data)
-    print(f"Minimum computed n={np.argmin(Fdata)} {np.around(min(Fdata),prec)}")
+    # Xdata, Fdata, accepts = parse_SPSA_callback(spsa_data)
+    parsed_data = parse_SPSA_convergence(spsa_data)
 
-    print(f"kept={np.around(100*accepts[0]/(accepts[0]+accepts[1]),1)}% n={len(Fdata)}  rejects={accepts[1]}")
+def plot_SPSA_callback(obj,prec=6,fignum=1,figsize=None,yline=None):
+    label = 'No Label'
+    target = None
+    gnd_state = 'Ground State: '
+    if isinstance(obj,list):
+        spsa_data = obj
+    else:
+        label = obj._label
+        target = obj._target
+        spsa_data = obj.SPSA_callback_data
+        if spsa_data is None or len(spsa_data) == 0:
+            print("No SPSA Callback Data Available")
+            return
+        eigenvalue = obj._result.eigenvalue
+        gnd_state += f'Computed {np.around(eigenvalue,prec)} '
 
+    if spsa_data is None or len(spsa_data) == 0:
+        print(f"No spsa_data found")
+        return
 
+    parsed_data = parse_SPSA_callback(spsa_data)
+    Xdata, Fdata, accepts = (parsed_data['Xa'], parsed_data['Fa'], parsed_data['accepts'])
+    gnd_state += f"Min {np.around(min(Fdata),prec)} "
+    print(f"Iterations={accepts[0]+accepts[1]} Accepted="
+          f"{np.around(100*accepts[0]/(accepts[0]+accepts[1]),1)} % "
+          f"Rejected={accepts[1]} min at n={np.argmin(Fdata)}")
+
+    if figsize is not None:
+        plt.figure(fignum, figsize=figsize)
     plt.title(label)
     plt.plot(Fdata, color='purple', lw=2)
     plt.ylabel('Energy')
     plt.xlabel('Iterations')
     if target is not None:
         rel_error = abs((target - eigenvalue) / target)
-        print(f'Expected ground state energy: {target:.10f}')
-        print(f'Relative error: {np.around(100*rel_error,8)}%')
+        gnd_state+= f'Expected {np.around(target,prec)}'
+        print(f'{gnd_state}\n{np.around(100*rel_error,prec)} % Error')
         plt.axhline(y=target, color="tab:red", ls="--", lw=2,
                     label="Target: " + str(target))
     else:
-        plt.axhline(y=eigenvalue, color="tab:red", ls="--", lw=2, label="Target: None" )
+        print(gnd_state)
+        plt.axvhline(y=eigenvalue, color="tab:red", ls="--", lw=2, label="Target: None" )
+    if yline is not None:
+        plt.axvline(x=yline, color="tab:red", ls="--", lw=2, label=f"Y {yline}" )
     plt.legend()
     plt.grid()
     plt.show()
 
-
 def parse_SPSA_callback(spsa_data):
     # Flatten the data for plotting
     (Fx,xvals,steps,accept,nF,Xdata,Fdata,Sdata,Ndata) = ([],[],[],[],[],[],[],[],[])
+    Rdata = []
     accepts = [0,0]
+    rejects = 0
     for curData in spsa_data:
+        Rdata.append(rejects)
         Fx.append(curData['Fx'])
         xvals.append(curData['x'])
         steps.append(curData['stepSize'])
@@ -552,11 +609,54 @@ def parse_SPSA_callback(spsa_data):
             Sdata.append(curData['stepSize'])
             Ndata.append(curData['n'])
             accepts[0] += 1
+            rejects = 0
         else:
             accepts[1] += 1
+            rejects += 1
+    return {'F':Fx, 'X':xvals, 'stepSize':steps,  'accepted':accept, 'nF':nF, 'accepts':accepts,
+            'Fa':Fdata, 'Xa':Xdata, 'stepSizeA':Sdata, 'nFa':Ndata, 'Rdata': Rdata }
 
-    return Xdata, Fdata, accepts
+def _parse_SPSA_callback(spsa_data, data_list = ['Xa','Fa','accepts'] ):
+    # Flatten the data for plotting
+    data = _parse_SPSA_callback(spsa_data)
+    return_data = []
+    for key in data_list:
+        return_data.append(data[key])
+    return return_data
 
+
+def parse_SPSA_convergence(spsa_data, mavg=5, target=None):
+    parsed_data = parse_SPSA_callback(spsa_data)
+    Fdata = parsed_data['Fa']
+    steps = parsed_data['stepSizeA']
+    (relF,delF,slopes,errs) = ([0],[0],[0], [0])  # Will be replaced with x[1] value for plotting
+    for i in range(1,len(steps)):
+        if target is not None:
+            errs.append(100.0*(target - Fdata[i])/target)
+        deltaF = Fdata[i] - Fdata[i-1]
+        delF.append(deltaF)
+        slopes.append(deltaF/steps[i])
+        relF.append(deltaF/Fdata[i-1])
+
+    if len(steps) > 1:
+        relF[0] = relF[1]
+        delF[0] = delF[1]
+        slopes[0] = slopes[1]
+        if target is not None:
+            errs[0] = errs[1]
+        else:
+            errs = None
+
+    # moving_average of absolute values of slopes for m elements
+    mAvg = np.convolve( np.abs(slopes), np.ones(mavg), 'valid') / mavg
+    mAvg = np.insert(mAvg,0,np.zeros(mavg-1)+0.001)
+
+    parsed_data['delF'] = delF
+    parsed_data['relF'] = relF
+    parsed_data['slopes'] = slopes
+    parsed_data['avgSlopes'] = mAvg
+    parsed_data['percErr'] = errs
+    return parsed_data
 
 def run_kagomeVQE(H, ansatz, optimizer, timeout=120, x0=None, target = None,
                  resultsList=None, service=None, backend=None, label=None,
@@ -579,16 +679,15 @@ def run_kagomeVQE(H, ansatz, optimizer, timeout=120, x0=None, target = None,
             Raises:
     """
     if label is None:
-        label = "KagomeVQE"
+        label = f"KagomeVQE {optimizer.__class__.__name__}"
     if resultsList is not None:
-        label += f" {len(resultsList)}"
+        label += f" idx={len(resultsList)}"
     init_SPSA_callback()
 
     if backend is None:
         from qiskit.primitives import Estimator
 
         estimator = Estimator([ansatz], [H])
-        label += f" Local {optimizer.__class__.__name__}"
         print(label)
         kagomeVQE = KagomeVQE(estimator, ansatz, optimizer,
                                timeout=None, target=target, label=label)
