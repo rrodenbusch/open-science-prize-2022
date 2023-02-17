@@ -92,8 +92,8 @@ def draw_lattice(lattice,positions=None,
            'node_color':node_color, }
     if positions is not None:
         style['pos']=positions
-    image = lattice.draw(style=style)
-    return image
+    lattice.draw(style=style)
+    return style
 
 def formatDuration(duration):
     days    = divmod(duration, 86400)        # Get days (without [0]!)
@@ -150,7 +150,6 @@ def get_provider(hub='ibm-q', group='open', project='main', channel='ibm_quantum
             for curBackend in provider.backends():
                 print(f"\t{curBackend.name}")
         return provider, service
-
 
 def init_notebook(output=True):
     """Setup a jupyter notebook with personalized defaults and return Environment
@@ -521,36 +520,137 @@ def init_SPSA_callback():
     """
     _SPSA_callback_data.clear()
 
+def plot_SPSA_convergence(curCache,indices=[-1],
+                     conv_lim = 0.035,
+                     movingAvg=5,perc=6,
+                     scatter_xlim=(0,0.14),
+                     minStart=20):
+    figsize=(8.5,6)
+    fignum=1
+    for idx in indices:
+        #===== Get cached data =====#
+        curResult = curCache[idx]
+        target = curResult.target
+        parsed_data = parse_SPSA_convergence(curResult.SPSA_callback_data,
+                                                    mavg=movingAvg,
+                                                    target=target)
+        # ==== Check for convergence and plot ====
+        conv_idx = get_convergence_index(list(np.abs(parsed_data['avgSlopes'])),
+                                         conv_lim=conv_lim,conv_ctr=5,offset=movingAvg)
+        if conv_idx is not None:
+            print(f"Convergence({conv_lim}) at {conv_idx} "
+                  f"Fx={np.around(parsed_data['Fa'][conv_idx],perc)} "
+                  f"{np.around(parsed_data['percErr'][conv_idx],perc)} % \n")
+        else:
+            print(f"Convergence Failure")
+        plot_SPSA_callback(curResult,fignum=fignum,figsize=figsize,yline=conv_idx)
 
-def plot_SPSA_convergence(obj,prec=6,slope=False,step=True,percent=True):
-    label = 'No Label'
-    target = None
-    if isinstance(obj,list):
-        spsa_data = obj
-    else:
-        label = obj._label
-        target = obj._target
-        spsa_data = obj.SPSA_callback_data
-        if spsa_data is None or len(spsa_data) == 0:
-            print("No SPSA Callback Data Available")
-            return
 
-    if spsa_data is None or len(spsa_data) == 0:
-        print(f"No spsa_data found")
-        return
+        #==== Convergence multiplot ====#
+        labels = ['slopes','avgSlopes', 'relF', 'percErr']
+        yscale = 'log'
+        plotData=[]
+        for label in labels:
+            data = parsed_data[label]
+            if yscale == 'log':
+                data = list(np.abs(data))
+            plotData.append(data)
 
-    # Xdata, Fdata, accepts = parse_SPSA_callback(spsa_data)
-    parsed_data = parse_SPSA_convergence(spsa_data)
+        quick_plot(plotData, labels=labels,
+                   title='Convergence', ylim=None,
+                   fignum=fignum, figsize=figsize,
+                   yscale=yscale)
+
+        #==== Convergence Scatter Plots ====
+        xdata = list(np.abs(parsed_data['avgSlopes']))[minStart:]
+        xlabel='Slope Moving Average'
+        ydata = list(np.abs(parsed_data['percErr']))[minStart:]
+        ylabel='Percentage Error'
+        quick_scatter(xdata,ydata,
+                      xlabel=xlabel, ylabel=ylabel,
+                      yscale='log',
+                      xline=1.0, yline=conv_lim,
+                      xlim=scatter_xlim,
+                      fignum=fignum,figsize=figsize)
+
+def quick_plot(data,labels=[],
+               title=None, ylim=None, yscale='linear',
+               xlabel='Iteration', ylabel='Value',
+               fignum=1, figsize=None,
+               colors=['black','red','purple','green']
+              ):
+
+    if figsize is not None:
+        plt.figure(fignum, figsize=figsize)
+    data = data if isinstance(data[0],list) else [data]
+    if title is not None:
+        plt.title(title)
+    if ylabel is not None:
+        plt.ylabel(ylabel)
+    if xlabel is not None:
+        plt.xlabel(xlabel)
+    if ylim is not None:
+        plt.ylim(ylim)
+    plt.yscale(yscale)
+    for idx in range(len(data)):
+        label = labels[idx] if len(labels) > idx else ''
+        curData = data[idx]
+        color = colors[np.mod(idx,len(colors))]
+        plt.plot(curData, color=color, lw=2, label=label)
+
+    if labels is not None:
+        plt.legend()
+    plt.grid()
+    return plt.show()
+
+def quick_scatter(xdata,ydata,fignum=1,figsize=None,
+                  xlim=None, ylim=None,
+                  xline=None,yline=None,
+                  yscale='linear',
+                  xlabel='X Data', ylabel='Y Data'):
+    if figsize is not None:
+        plt.figure(fignum, figsize=figsize)
+
+    if xlim is not None:
+        plt.xlim(xlim)
+    if ylim is not None:
+        plt.ylim(ylim)
+    if xline is not None:
+        plt.axhline(y=xline, color="tab:red", ls="--", lw=2, label="X {xline}" )
+    if yline is not None:
+        plt.axvline(x=yline, color="tab:red", ls="--", lw=2, label="Y {xline}" )
+    plt.yscale(yscale)
+    plt.scatter(xdata,ydata)
+    plt.xlabel(xlabel)
+    plt.ylabel(ylabel)
+    plt.grid()
+    return plt.show()
+
+def get_convergence_index(xdata,conv_lim=0.035, conv_ctr=5, offset=1 ):
+    conv_indices = np.where(np.array(xdata) < conv_lim )[0]
+    #     print(f"found {len(conv_indices)} possibilities\n{conv_indices}")
+    idx = offset-1
+    conv_idx = None
+    #     print(f"Starting search at idx={idx}")
+    while (conv_idx is None) and (idx+conv_ctr < len(conv_indices)):
+        targetList = list(range(conv_indices[idx],conv_indices[idx]+conv_ctr))
+        testList = list(conv_indices[idx:idx+conv_ctr])
+        if testList == targetList:
+            conv_idx=conv_indices[idx+conv_ctr-1]
+        idx+=1
+    return conv_idx
 
 def plot_SPSA_callback(obj,prec=6,fignum=1,figsize=None,yline=None):
     label = 'No Label'
     target = None
     gnd_state = 'Ground State: '
+    duration = 'Unknown'
     if isinstance(obj,list):
         spsa_data = obj
     else:
         label = obj._label
         target = obj._target
+        duration = formatDuration(obj._result.optimizer_time)
         spsa_data = obj.SPSA_callback_data
         if spsa_data is None or len(spsa_data) == 0:
             print("No SPSA Callback Data Available")
@@ -565,7 +665,7 @@ def plot_SPSA_callback(obj,prec=6,fignum=1,figsize=None,yline=None):
     parsed_data = parse_SPSA_callback(spsa_data)
     Xdata, Fdata, accepts = (parsed_data['Xa'], parsed_data['Fa'], parsed_data['accepts'])
     gnd_state += f"Min {np.around(min(Fdata),prec)} "
-    print(f"Iterations={accepts[0]+accepts[1]} Accepted="
+    print(f"Duration {duration} Iterations={accepts[0]+accepts[1]} Accepted="
           f"{np.around(100*accepts[0]/(accepts[0]+accepts[1]),1)} % "
           f"Rejected={accepts[1]} min at n={np.argmin(Fdata)}")
 
@@ -635,7 +735,12 @@ def parse_SPSA_convergence(spsa_data, mavg=5, target=None):
             errs.append(100.0*(target - Fdata[i])/target)
         deltaF = Fdata[i] - Fdata[i-1]
         delF.append(deltaF)
-        slopes.append(deltaF/steps[i])
+        if steps[i] > 1e-10:
+            slopes.append(deltaF/steps[i])
+        else:
+            print(f"Skipping iteration {i} with step={steps[i]}")
+            slopes.append(slopes[-1])
+
         relF.append(deltaF/Fdata[i-1])
 
     if len(steps) > 1:
@@ -684,17 +789,24 @@ def run_kagomeVQE(H, ansatz, optimizer, timeout=120, x0=None, target = None,
         label += f" idx={len(resultsList)}"
     init_SPSA_callback()
 
-    if backend is None:
-        from qiskit.primitives import Estimator
+    if service is None:
+        if backend is None:
+            from qiskit.primitives import Estimator
 
-        estimator = Estimator([ansatz], [H])
-        print(label)
-        kagomeVQE = KagomeVQE(estimator, ansatz, optimizer,
-                               timeout=None, target=target, label=label)
-        result = kagomeVQE.compute_minimum_eigenvalue(H,x0=x0)
+            estimator = Estimator([ansatz], [H])
+            print(label)
+            kagomeVQE = KagomeVQE(estimator, ansatz, optimizer,
+                                   timeout=None, target=target, label=label)
+            result = kagomeVQE.compute_minimum_eigenvalue(H,x0=x0)
+        else:
+            from qiskit.primitives import BackendEstimator
+            estimator = BackendEstimator(backend, skip_transpilation=False)
+            print(label)
+            kagomeVQE = KagomeVQE(estimator, ansatz, optimizer,
+                                  timeout=None, target=target, label=label)
+            result = kagomeVQE.compute_minimum_eigenvalue(H,x0=x0)
     else:
         from qiskit_ibm_runtime import Session, Estimator as RuntimeEstimator
-        # estimator = RuntimeEstimator(session=session)
         with Session(service=service, backend=backend) as session:
             label += f" {backend} {optimizer.__class__.__name__}"
             print(label)
