@@ -34,6 +34,9 @@ def getVersion(output=True):
         print(myversion)
     return(myversion)
 
+""" ################################################################
+        Lattrice Generation
+    ################################################################ """
 def create_lattice(numNodes,edges):
     # Generate graph of kagome unit cell
     graph = rx.PyGraph(multigraph=False)
@@ -44,46 +47,6 @@ def create_lattice(numNodes,edges):
 
     # Make a Lattice from the graph
     return Lattice(graph)
-
-def compute_eigenvalues(hams,k=64,force=False, prev_results=None):
-    from qiskit.algorithms import NumPyEigensolver
-    if prev_results is None:
-        prev_results = {}
-    for key,H in hams.items():
-        degen_list = ''
-        curEigenvalues = prev_results.get(key,None)
-        if force or (curEigenvalues is None):
-            print(f"Computing eigenvalues for {key}")
-            prev_results[key]  = NumPyEigensolver(k=k).compute_eigenvalues(H)
-    return(prev_results)
-
-def list_eigenvalues(eigData,cells):
-    if not isinstance(eigData,dict):
-        eigData = {'input':eigData}
-    targets={}
-    for key, result in eigData.items():
-        targets[key] = result.eigenvalues[0]
-        degen_list = ''
-        unq_value, unq_counts = degeneracy(result.eigenvalues)
-        for eig in unq_value:
-            degen = unq_counts[eig]
-            degen_list += f"\n\t{np.around(eig,4):8.4f}:[{degen}]"
-        print(f"\nH{key}: Edges {len(cells[key].weighted_edge_list)} "
-              f"Eigenvalues {len(result.eigenvalues)} {degen_list}")
-    return targets
-
-def degeneracy(list1,precision=6):
-    unique_list  = []
-    unique_count = {}
-    for x1 in list1:
-        x = np.around(x1,precision)
-        # check if exists in unique_list or not
-        if x not in unique_list:
-            unique_list.append(x)
-            unique_count[x] = 1
-        else:
-            unique_count[x] += 1
-    return unique_list, unique_count
 
 def draw_lattice(lattice,positions=None,
                  with_labels=True,font_color='white',
@@ -109,16 +72,6 @@ def formatDuration(duration):
     else:
         msg += f"{np.around(minutes[1],5)} sec"
     return msg
-
-def get_hamiltonian(lattice,spin_interaction=1.0,global_potential=0.0):
-    from heisenberg_model import HeisenbergModel
-    from qiskit_nature.mappers.second_quantization import LogarithmicMapper
-    heis = HeisenbergModel.uniform_parameters(lattice=lattice,
-                                                 uniform_interaction=spin_interaction,
-                                                 uniform_onsite_potential=global_potential,
-                                                )
-    H = 4 * LogarithmicMapper().map(heis.second_q_ops().simplify())
-    return H
 
 def get_provider(hub='ibm-q', group='open', project='main', channel='ibm_quantum',
                  compatible=False, output=True, force=False):
@@ -214,25 +167,6 @@ def iter2str(obj,name: str = None,indent: int = 4) -> str:
 
     return iter_str
 
-def load_object(fname):
-    import pickle
-    with open(fname, 'rb') as obj_file:
-        obj = pickle.load(obj_file)
-    return obj
-
-def save_object(obj,fname):
-    import pickle
-    with open(fname, 'wb') as obj_file:
-        pickle.dump(obj, obj_file)
-
-def SparsePauliPrint(pauli,label='Sparse Pauli'):
-    cnt=0
-    print(f"{label}{pauli.to_matrix().shape} as list:")
-    for curItem in pauli.to_list():
-        cnt+=1
-        print(f"{cnt}:\t{curItem[0]} * {curItem[1]}")
-    print("\n")
-
 """ ################################################################
         Class and utilities to run kagomeVQE data trials
     ################################################################ """
@@ -259,7 +193,7 @@ _doneJobs    = [JobStatus.CANCELLED, JobStatus.DONE, JobStatus.ERROR, ]
 class KagomeVQE(MinimumEigensolver):
 
     def __init__(self, estimator, circuit, optimizer, timeout=120, target=None,
-                label=None):
+                label=None, shots=1024 ):
         self._estimator       = estimator
         self._circuit         = circuit
         self._optimizer       = optimizer
@@ -270,6 +204,7 @@ class KagomeVQE(MinimumEigensolver):
         self._result          = None
         self._initial_point   = None
         self._label           = label
+        self._shots           = shots
         self.attrs            = {}
 
     def to_dict(self):
@@ -320,6 +255,10 @@ class KagomeVQE(MinimumEigensolver):
     @property
     def result(self):
         return self._result
+
+    @property
+    def shots(self):
+        return self._shots
 
     @property
     def target(self) -> int | None:
@@ -389,12 +328,13 @@ class KagomeVQE(MinimumEigensolver):
                         job_result = job.result()
 
                 except (JobError, RuntimeJobTimeoutError) as ex:
-                    print(f"Job:{jobId} Try:{try_count} Status:{job_status} T:{time()-start}sec")
+                    print(f"cur Job:{jobId} Try:{try_count} Status:{job_status} T:{time()-start} sec")
                     print(f"Job {jobId} Try {try_count} Error {ex}")
                     if try_count < 2:
                         pass
                     else:
-                        raise ex
+                        print(f"Job {jobId} Try {try_count} Error {ex} Re-Raise")
+                        raise
 
             # Get the measured energy value
             value = job_result.values[0]
@@ -433,6 +373,15 @@ class KagomeVQE(MinimumEigensolver):
 """ ################################################################
              Manage the data generated for each test run
     ################################################################ """
+def getX0(p_idx,curCache):
+    if isinstance(p_idx,int) and (p_idx > 0) and (p_idx <= len(curCache)):
+        x0 = curCache[p_idx]._callback_points[-1]
+    elif isinstance(p_idx,str) and (p_idx == '0'):
+        x0 = 0
+    else:
+        x0 = None
+    return x0
+
 def list_results(data_cache):
     """ Display overview of result data cache
             Args:
@@ -467,6 +416,17 @@ def load_results(fname):
         print(f"File not found.")
     print(f"Loaded {len(results)} results from {fname}")
     return results
+
+def load_object(fname):
+    import pickle
+    with open(fname, 'rb') as obj_file:
+        obj = pickle.load(obj_file)
+    return obj
+
+def save_object(obj,fname):
+    import pickle
+    with open(fname, 'wb') as obj_file:
+        pickle.dump(obj, obj_file)
 
 def save_results(data_cache,fname):
     """ Save a copy of the results data cache
@@ -645,11 +605,13 @@ def plot_SPSA_callback(obj,prec=6,fignum=1,figsize=None,yline=None):
     target = None
     gnd_state = 'Ground State: '
     duration = 'Unknown'
+    nshots = '?'
     if isinstance(obj,list):
         spsa_data = obj
     else:
         label = obj._label
         target = obj._target
+        nshots = obj._shots
         duration = formatDuration(obj._result.optimizer_time)
         spsa_data = obj.SPSA_callback_data
         if spsa_data is None or len(spsa_data) == 0:
@@ -665,7 +627,7 @@ def plot_SPSA_callback(obj,prec=6,fignum=1,figsize=None,yline=None):
     parsed_data = parse_SPSA_callback(spsa_data)
     Xdata, Fdata, accepts = (parsed_data['Xa'], parsed_data['Fa'], parsed_data['accepts'])
     gnd_state += f"Min {np.around(min(Fdata),prec)} "
-    print(f"Duration {duration} Iterations={accepts[0]+accepts[1]} Accepted="
+    print(f"Duration {duration} Shots={nshots} Iterations={accepts[0]+accepts[1]} Accepted="
           f"{np.around(100*accepts[0]/(accepts[0]+accepts[1]),1)} % "
           f"Rejected={accepts[1]} min at n={np.argmin(Fdata)}")
 
@@ -741,7 +703,10 @@ def parse_SPSA_convergence(spsa_data, mavg=5, target=None):
             print(f"Skipping iteration {i} with step={steps[i]}")
             slopes.append(slopes[-1])
 
-        relF.append(deltaF/Fdata[i-1])
+        if Fdata[i] == 0:
+            relF.append(relF[i-1])
+        else:
+            relF.append(deltaF/Fdata[i])
 
     if len(steps) > 1:
         relF[0] = relF[1]
@@ -765,7 +730,7 @@ def parse_SPSA_convergence(spsa_data, mavg=5, target=None):
 
 def run_kagomeVQE(H, ansatz, optimizer, timeout=120, x0=None, target = None,
                  resultsList=None, service=None, backend=None, label=None,
-                 miniAnsatz=None):
+                 miniAnsatz=None, shots=1024):
     """ Run the eigenvalue search
             Args:
                 H (SparsePauliSum): The Hamiltonian
@@ -779,10 +744,12 @@ def run_kagomeVQE(H, ansatz, optimizer, timeout=120, x0=None, target = None,
                 backend (Union[str, Backend]): Backend to use for runtime exections
                 label (str): Initial label
                 miniAnsatz (QuantumCircuit): ansatz without any ancillary qubits
+                shots (int): Run option for shots
             Returns:
                 KagomeVQE: Custom class with results
             Raises:
     """
+    print('Hello World')
     if label is None:
         label = f"KagomeVQE {optimizer.__class__.__name__}"
     if resultsList is not None:
@@ -793,26 +760,31 @@ def run_kagomeVQE(H, ansatz, optimizer, timeout=120, x0=None, target = None,
         if backend is None:
             from qiskit.primitives import Estimator
 
-            estimator = Estimator([ansatz], [H])
+            estimator = Estimator([ansatz], [H], options={'shots':shots} )
             print(label)
             kagomeVQE = KagomeVQE(estimator, ansatz, optimizer,
-                                   timeout=None, target=target, label=label)
+                                   timeout=None, target=target, label=label,
+                                   shots = shots )
             result = kagomeVQE.compute_minimum_eigenvalue(H,x0=x0)
         else:
             from qiskit.primitives import BackendEstimator
-            estimator = BackendEstimator(backend, skip_transpilation=False)
+            estimator = BackendEstimator(backend, skip_transpilation=False,
+                                         options={'shots':shots})
             print(label)
             kagomeVQE = KagomeVQE(estimator, ansatz, optimizer,
-                                  timeout=None, target=target, label=label)
+                                  timeout=None, target=target, label=label,
+                                  shots=shots )
             result = kagomeVQE.compute_minimum_eigenvalue(H,x0=x0)
     else:
         from qiskit_ibm_runtime import Session, Estimator as RuntimeEstimator
         with Session(service=service, backend=backend) as session:
             label += f" {backend} {optimizer.__class__.__name__}"
             print(label)
-            estimator = RuntimeEstimator(session=session)
+            estimator = RuntimeEstimator(session=session,
+                                         options={'shots':shots})
             kagomeVQE = KagomeVQE(estimator, ansatz, optimizer,
-                                   timeout=timeout, target=target, label=label)
+                                  timeout=None, target=target, label=label,
+                                  shots=shots)
             result = kagomeVQE.compute_minimum_eigenvalue(H,x0=x0)
 
     if resultsList is not None:

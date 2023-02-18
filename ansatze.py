@@ -32,12 +32,12 @@ def list_Ansatz(A):
     def get_Alabel(A,name=None):
         if name is None:
             name = A.name
-        return f"{name} n:{3} q:{A.num_qubits} p:{A.num_parameters}"
+        return f"{name} nqbits:{A.num_qubits} nparams:{A.num_parameters}"
     if isinstance(A,dict):
         for key,value in A.items():
-            print(f"'{key}'\t {get_Alabel(value)} g:{str(dict(value.count_ops()))}")
+            print(f"'{key}'\t {get_Alabel(value)} gates:{str(dict(value.count_ops()))}")
     else:
-        print(f"{get_Alabel(A)} g:{str(dict(A.count_ops()))}")
+        print(f"{get_Alabel(A)} gates:{str(dict(A.count_ops()))}")
 
 # Build a custom ansatz from scratch with optional starting circuit
 def rotationQC(nqubits, r0, name=''):

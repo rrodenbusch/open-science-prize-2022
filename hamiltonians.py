@@ -16,11 +16,7 @@
 """
 # -------------  Lattices and Hamiltonians ----------- #
 import kagome
-
-# cells = {}
-# hams = {}
-positions = {}
-
+import numpy as np
 
 # Define edge lists for the lattices
 t = 1    # All are weighted equally to start
@@ -94,13 +90,13 @@ def BoundaryCondition(qbits,K,num_qubits):
 
 def init_hamiltonians(cells=None, force=False):
     hams = {}
-    hams['12_12']  = kagome.get_hamiltonian(cells['12_12'])
-    hams['12_16']  = kagome.get_hamiltonian(cells['12_16'])
-    hams['4_7']    = kagome.get_hamiltonian(cells['4_7'])
-    hams['4_4']    = kagome.get_hamiltonian(cells['4_4'])
-    hams['3_3']    = kagome.get_hamiltonian(cells['3_3'])
-    hams['sq_4']   = kagome.get_hamiltonian(cells['sq_4'])
-    hams['sq_7']   = kagome.get_hamiltonian(cells['sq_7'])
+    hams['12_12']  = get_hamiltonian(cells['12_12'])
+    hams['12_16']  = get_hamiltonian(cells['12_16'])
+    hams['4_7']    = get_hamiltonian(cells['4_7'])
+    hams['4_4']    = get_hamiltonian(cells['4_4'])
+    hams['3_3']    = get_hamiltonian(cells['3_3'])
+    hams['sq_4']   = get_hamiltonian(cells['sq_4'])
+    hams['sq_7']   = get_hamiltonian(cells['sq_7'])
 
     # Case 1  K = I
     H4_4_BCS_C1 = BoundaryCondition([0,1],I,4) + BoundaryCondition([0,3],I,4)
@@ -113,14 +109,68 @@ def init_hamiltonians(cells=None, force=False):
 
 
     eigenvalue_results = {} if force else kagome.load_object('eigenvalues.dump')
-    eigenvalue_results=kagome.compute_eigenvalues(hams,64,force=force,prev_results=eigenvalue_results)
-    targets = kagome.list_eigenvalues(eigenvalue_results,cells)
+    eigenvalue_results=compute_eigenvalues(hams,64,force=force,prev_results=eigenvalue_results)
+    targets = list_eigenvalues(eigenvalue_results,cells)
     kagome.save_object(eigenvalue_results,'eigenvalues.dump')
 
     return hams, eigenvalue_results, targets
 
+def get_hamiltonian(lattice,spin_interaction=1.0,global_potential=0.0):
+    from heisenberg_model import HeisenbergModel
+    from qiskit_nature.mappers.second_quantization import LogarithmicMapper
+    heis = HeisenbergModel.uniform_parameters(lattice=lattice,
+                                                 uniform_interaction=spin_interaction,
+                                                 uniform_onsite_potential=global_potential,
+                                                )
+    H = 4 * LogarithmicMapper().map(heis.second_q_ops().simplify())
+    return H
 
+def compute_eigenvalues(hams,k=64,force=False, prev_results=None):
+    from qiskit.algorithms import NumPyEigensolver
+    if prev_results is None:
+        prev_results = {}
+    for key,H in hams.items():
+        degen_list = ''
+        curEigenvalues = prev_results.get(key,None)
+        if force or (curEigenvalues is None):
+            print(f"Computing eigenvalues for {key}")
+            prev_results[key]  = NumPyEigensolver(k=k).compute_eigenvalues(H)
+    return(prev_results)
 
+def list_eigenvalues(eigData,cells):
+    if not isinstance(eigData,dict):
+        eigData = {'input':eigData}
+    targets={}
+    for key, result in eigData.items():
+        targets[key] = result.eigenvalues[0]
+        degen_list = ''
+        unq_value, unq_counts = degeneracy(result.eigenvalues)
+        for eig in unq_value:
+            degen = unq_counts[eig]
+            degen_list += f"\n\t{np.around(eig,4):8.4f}:[{degen}]"
+        print(f"\nH{key}: Edges {len(cells[key].weighted_edge_list)} "
+              f"Eigenvalues {len(result.eigenvalues)} {degen_list}")
+    return targets
 
+def degeneracy(list1,precision=6):
+    unique_list  = []
+    unique_count = {}
+    for x1 in list1:
+        x = np.around(x1,precision)
+        # check if exists in unique_list or not
+        if x not in unique_list:
+            unique_list.append(x)
+            unique_count[x] = 1
+        else:
+            unique_count[x] += 1
+    return unique_list, unique_count
+
+def SparsePauliPrint(pauli,label='Sparse Pauli'):
+    cnt=0
+    print(f"{label}{pauli.to_matrix().shape} as list:")
+    for curItem in pauli.to_list():
+        cnt+=1
+        print(f"{cnt}:\t{curItem[0]} * {curItem[1]}")
+    print("\n")
 
 
