@@ -550,6 +550,7 @@ def plot_SPSA_convergence(curCache,indices=[-1],
                      conv_lim = 0.035,
                      movingAvg=5,perc=6,
                      scatter_xlim=(0,0.14),
+                     convergence=True,
                      minStart=20):
     figsize=(8.5,6)
     fignum=1
@@ -572,33 +573,33 @@ def plot_SPSA_convergence(curCache,indices=[-1],
             print(f"Convergence Failure")
         plot_SPSA_callback(curResult,fignum=fignum,figsize=figsize,yline=conv_idx)
 
+        if convergence:
+            #==== Convergence multiplot ====#
+            labels = ['slopes','avgSlopes', 'relF', 'percErr']
+            yscale = 'log'
+            plotData=[]
+            for label in labels:
+                data = parsed_data[label]
+                if yscale == 'log':
+                    data = list(np.abs(data))
+                plotData.append(data)
 
-        #==== Convergence multiplot ====#
-        labels = ['slopes','avgSlopes', 'relF', 'percErr']
-        yscale = 'log'
-        plotData=[]
-        for label in labels:
-            data = parsed_data[label]
-            if yscale == 'log':
-                data = list(np.abs(data))
-            plotData.append(data)
+            quick_plot(plotData, labels=labels,
+                       title='Convergence', ylim=None,
+                       fignum=fignum, figsize=figsize,
+                       yscale=yscale)
 
-        quick_plot(plotData, labels=labels,
-                   title='Convergence', ylim=None,
-                   fignum=fignum, figsize=figsize,
-                   yscale=yscale)
-
-        #==== Convergence Scatter Plots ====
-        xdata = list(np.abs(parsed_data['avgSlopes']))[minStart:]
-        xlabel='Slope Moving Average'
-        ydata = list(np.abs(parsed_data['percErr']))[minStart:]
-        ylabel='Percentage Error'
-        quick_scatter(xdata,ydata,
-                      xlabel=xlabel, ylabel=ylabel,
-                      yscale='log',
-                      xline=1.0, yline=conv_lim,
-                      xlim=scatter_xlim,
-                      fignum=fignum,figsize=figsize)
+            #==== Convergence Scatter Plots ====
+            xdata = list(np.abs(parsed_data['avgSlopes']))[minStart:]
+            xlabel='Slope Moving Average'
+            ydata = list(np.abs(parsed_data['percErr']))[minStart:]
+            ylabel='Percentage Error'
+            quick_scatter(xdata,ydata,
+                          xlabel=xlabel, ylabel=ylabel,
+                          yscale='log',
+                          xline=1.0, yline=conv_lim,
+                          xlim=scatter_xlim,
+                          fignum=fignum,figsize=figsize)
 
 def quick_plot(data,labels=[],
                title=None, ylim=None, yscale='linear',
@@ -854,14 +855,7 @@ def run_kagomeVQE(H, ansatz, optimizer, timeout=120, x0=None, target = None,
             print(f"Default Options")
             options = Options()
         else:
-            print(f"ProvidedOptions")
-        # options = Options(environment = {'job_tags':['defaultJob',
-        #                                              'opt(3)',
-        #                                              'resil(1)',
-        #                                              'shots(1024)']},
-        #                   execution = {'shots':1024},
-        #                   optimization_level = 3,
-        #                   resilience_level   = 1 )
+            print(f"Provided Options")
         with Session(service=service, backend=backend) as session:
             label += f" {backend} {optimizer.__class__.__name__}"
             print(label)
