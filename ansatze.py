@@ -23,9 +23,18 @@ import numpy as np
 import hamiltonians
 
 # Mapping lattice node to device qubits
+qbitmap_3_to_5   = [0,1,2]      # lima, belem, quito, manila
+qbitmap_3_to_7   = [0,1,2]      # nairobi oslo lagos perth jakarta
+
+qbitmap_4_to_4   = [0,1,2,3]
+qbitmap_4_to_5   = [0,1,2,3]
+qbitmap_4_to_7   = [0,1,2,3]
+
+qbitmap_5_to_5   = [0,1,2,3,4]
+qbitmap_5_to_7   = [0,1,2,3,5]  # nairobi, oslo, jakarta, perth, lagos
+qbitmap_5_to_16  = [0,1,2,7,4]  # guadalupe
+
 qbitmap_12_to_16 = [1, 2, 3, 5, 8, 11, 14, 13, 12, 10, 7, 4] # for guadalupe and FakeGuadalupe
-qbitmap_4_to_7   = [0,1,2,3]    # For nairobi and oslo
-qbitmap_3_to_7   = [0,1,2]      # For nairobi and oslo
 
 
 def list_Ansatz(A):
@@ -99,6 +108,57 @@ def customAnsatz2(num_qubits,qc=None,layers=0,name='ansatz2'):
         ansatz2.cx(range(0, num_qubits-1), range(1, num_qubits))
     return ansatz2
 
+def customAnsatz3(num_qubits, qc=None, reps=3, name='ansatz3',
+                  coupling=None):
+    from qiskit.circuit import Parameter
+    A = QuantumCircuit(num_qubits,name=name) if qc is None else qc.copy(name=name)
+    num_qubits = A.num_qubits
+    # Default coupling is linear
+    if coupling is None:
+        coupling = []
+        for i in range(num_qubits-1):
+            coupling.append([i,i+1])
+
+    # print(f"Coupling {coupling}")
+    idx = 0
+    for r in range(reps):
+        for curQbit in range(num_qubits):   # Repeat rx(t) sx rx(t)
+            A.rz(Parameter(f'θ_{idx}'), curQbit)
+            A.sx(curQbit)
+            A.rz(Parameter(f'θ_{idx+1}'), curQbit)
+            idx += 2
+        for curMap in coupling:  # Add the cx for each coupled qbit
+            if len(curMap) > 1:
+                A.cx(curMap[0],curMap[1])
+
+    return A
+
+def customAnsatz4(num_qubits, qubits=None, qc=None, name='ansatz3',
+                  couplings=None,pIdx=0):
+    from qiskit.circuit import Parameter
+    A = QuantumCircuit(num_qubits,name=name) if qc is None else qc.copy(name=name)
+    num_qubits = A.num_qubits
+    qubits = list(range(num_qubits)) if qubits is None else qubits
+    # Default coupling is linear, one pass (Same as 3)
+    if couplings is None:
+        coupling = []
+        for i in range(num_qubits-1):
+            coupling.append([i,i+1])
+        couplings = [coupling]
+
+    idx = pIdx
+    for cIdx in range(len(couplings)):
+        coupling=couplings[cIdx]
+        for curQbit in qubits:   # Repeat rx(t) sx rx(t)
+            A.rz(Parameter(f'θ_{idx}'), curQbit)
+            A.sx(curQbit)
+            A.rz(Parameter(f'θ_{idx+1}'), curQbit)
+            idx += 2
+        for curMap in coupling:  # Add the cx for each coupled qbit
+            if len(curMap) > 1:
+                A.cx(curMap[0],curMap[1])
+
+    return A
 
 def customAnsatz1(num_qubits,name='cust1'):
     from qiskit.circuit import Parameter
@@ -117,17 +177,168 @@ def customAnsatz1(num_qubits,name='cust1'):
     return ansatz_custom
 
 
-def init_ansatze(H=None,backends=None,targets=None):
+def init_ansatze(H=None,backends=None,targets=None,optimization_level=1):
 
     Anzs = {}
     circuits = {}
     hams = H if H is not None else hamiltonians.init_hams()
 
-    Anzs['A3_SU2'] = EfficientSU2(3, entanglement='linear', reps=3,
-                                     name='A3_SU2',
-                                     skip_final_rotation_layer=True).decompose()
-    Anzs['A3_7_SU2_opt'] = transpile(Anzs['A3_SU2'], backend=backends['7'], initial_layout=qbitmap_3_to_7)
-    Anzs['A3_7_SU2_opt'].name = 'A3_7_SU2_opt'
+
+    ######## Triangles #########
+    E='S3'
+    baseName = f"A3_3_SU2_{E}"
+    Anzs[baseName] = EfficientSU2(3, entanglement='sca', reps=3, su2_gates=['ry','rz'],
+                           name=baseName,skip_final_rotation_layer=True).decompose()
+    ### 5 qubits
+    Anzs[f'A3_a_SU2_{E}']  = transpile(Anzs[baseName], backend=backends['a'], # lima
+                                 initial_layout=qbitmap_3_to_5, optimization_level=optimization_level)
+    Anzs[f'A3_b_SU2_{E}']  = transpile(Anzs[baseName], backend=backends['b'], # belem
+                                     initial_layout=qbitmap_3_to_5, optimization_level=optimization_level)
+    Anzs[f'A3_m_SU2_{E}']  = transpile(Anzs[baseName], backend=backends['m'], # manila
+                                     initial_layout=qbitmap_3_to_5, optimization_level=optimization_level)
+    Anzs[f'A3_q_SU2_{E}']  = transpile(Anzs[baseName], backend=backends['q'], # quito
+                                     initial_layout=qbitmap_3_to_5, optimization_level=optimization_level)
+    ### 7 qubits
+    Anzs[f'A3_p_SU2_{E}'] = transpile(Anzs[baseName], backend=backends['p'], # perth
+                                     initial_layout=qbitmap_3_to_7, optimization_level=optimization_level)
+    Anzs[f'A3_l_SU2_{E}']  = transpile(Anzs[baseName], backend=backends['l'], # lagos
+                                     initial_layout=qbitmap_3_to_7, optimization_level=optimization_level )
+
+    ######## Triangles #########
+    Anzs['A3_3_SU2_F1'] = EfficientSU2(3, entanglement='full', reps=1, su2_gates=['ry','rz'],
+                           name='A3_3_SU2_F1',skip_final_rotation_layer=True).decompose()
+    ### 5 qubits
+    Anzs['A3_a_SU2_F1']  = transpile(Anzs['A3_3_SU2_F1'], backend=backends['a'], # lima
+                                     initial_layout=qbitmap_3_to_5, optimization_level=optimization_level)
+    Anzs['A3_b_SU2_F1']  = transpile(Anzs['A3_3_SU2_F1'], backend=backends['b'], # belem
+                                     initial_layout=qbitmap_3_to_5, optimization_level=optimization_level)
+    Anzs['A3_m_SU2_F1']  = transpile(Anzs['A3_3_SU2_F1'], backend=backends['m'], # manila
+                                     initial_layout=qbitmap_3_to_5, optimization_level=optimization_level)
+    Anzs['A3_q_SU2_F1']  = transpile(Anzs['A3_3_SU2_F1'], backend=backends['q'], # quito
+                                     initial_layout=qbitmap_3_to_5, optimization_level=optimization_level)
+    ### 7 qubits
+    Anzs['A3_p_SU2_F1'] = transpile(Anzs['A3_3_SU2_F1'], backend=backends['p'], # perth
+                                     initial_layout=qbitmap_3_to_7, optimization_level=optimization_level)
+    Anzs['A3_l_SU2_F1']  = transpile(Anzs['A3_3_SU2_F1'], backend=backends['l'], # lagos
+                                     initial_layout=qbitmap_3_to_7, optimization_level=optimization_level )
+
+    ######## Triangles #########
+    Anzs['A3_3_SU2_C4'] = EfficientSU2(3, entanglement='circular', reps=4,
+                           name='A3_3_SU2_C4',skip_final_rotation_layer=True).decompose()
+    ### 5 qubits
+    Anzs['A3_a_SU2_C4']  = transpile(Anzs['A3_3_SU2_C4'], backend=backends['a'], # lima
+                                     initial_layout=qbitmap_3_to_5, optimization_level=optimization_level)
+    Anzs['A3_b_SU2_C4']  = transpile(Anzs['A3_3_SU2_C4'], backend=backends['b'], # belem
+                                     initial_layout=qbitmap_3_to_5, optimization_level=optimization_level)
+    Anzs['A3_m_SU2_C4']  = transpile(Anzs['A3_3_SU2_C4'], backend=backends['m'], # manila
+                                     initial_layout=qbitmap_3_to_5, optimization_level=optimization_level)
+    Anzs['A3_q_SU2_C4']  = transpile(Anzs['A3_3_SU2_C4'], backend=backends['q'], # quito
+                                     initial_layout=qbitmap_3_to_5, optimization_level=optimization_level)
+    ### 7 qubits
+    Anzs['A3_p_SU2_C4'] = transpile(Anzs['A3_3_SU2_C4'], backend=backends['p'], # perth
+                                     initial_layout=qbitmap_3_to_7, optimization_level=optimization_level)
+    Anzs['A3_l_SU2_C4']  = transpile(Anzs['A3_3_SU2_C4'], backend=backends['l'], # lagos
+                                     initial_layout=qbitmap_3_to_7, optimization_level=optimization_level)
+
+    ######## Triangles #########
+    Anzs['A3_3_SU2_C1'] = EfficientSU2(3, entanglement='circular', reps=1,
+                           name='A3_3_SU2_C1',skip_final_rotation_layer=True).decompose()
+    ### 5 qubits
+    Anzs['A3_a_SU2_C1']  = transpile(Anzs['A3_3_SU2_C1'], backend=backends['a'], # lima
+                                     initial_layout=qbitmap_3_to_5, optimization_level=optimization_level)
+    Anzs['A3_b_SU2_C1']  = transpile(Anzs['A3_3_SU2_C1'], backend=backends['b'], # belem
+                                     initial_layout=qbitmap_3_to_5, optimization_level=optimization_level)
+    Anzs['A3_m_SU2_C1']  = transpile(Anzs['A3_3_SU2_C1'], backend=backends['m'], # manila
+                                     initial_layout=qbitmap_3_to_5, optimization_level=optimization_level)
+    Anzs['A3_q_SU2_C1']  = transpile(Anzs['A3_3_SU2_C1'], backend=backends['q'], # quito
+                                     initial_layout=qbitmap_3_to_5, optimization_level=optimization_level)
+    ### 7 qubits
+    Anzs['A3_p_SU2_C1'] = transpile(Anzs['A3_3_SU2_C1'], backend=backends['p'], # perth
+                                     initial_layout=qbitmap_3_to_7, optimization_level=optimization_level)
+    Anzs['A3_l_SU2_C1']  = transpile(Anzs['A3_3_SU2_C1'], backend=backends['l'], # lagos
+                                     initial_layout=qbitmap_3_to_7, optimization_level=optimization_level )
+
+    ######## Triangles #########
+    Anzs['A3_3_SU2_L1'] = EfficientSU2(3, entanglement='linear', reps=1,
+                           name='A3_3_SU2_L1',skip_final_rotation_layer=True).decompose()
+    ### 5 qubits
+    Anzs['A3_a_SU2_L1']  = transpile(Anzs['A3_3_SU2_L1'], backend=backends['a'], # lima
+                                     initial_layout=qbitmap_3_to_5, optimization_level=optimization_level)
+    Anzs['A3_b_SU2_L1']  = transpile(Anzs['A3_3_SU2_L1'], backend=backends['b'], # belem
+                                     initial_layout=qbitmap_3_to_5, optimization_level=optimization_level)
+    Anzs['A3_m_SU2_L1']  = transpile(Anzs['A3_3_SU2_L1'], backend=backends['m'], # manila
+                                     initial_layout=qbitmap_3_to_5, optimization_level=optimization_level)
+    Anzs['A3_q_SU2_L1']  = transpile(Anzs['A3_3_SU2_L1'], backend=backends['q'], # quito
+                                     initial_layout=qbitmap_3_to_5, optimization_level=optimization_level)
+    ### 7 qubits
+    Anzs['A3_p_SU2_L1'] = transpile(Anzs['A3_3_SU2_L1'], backend=backends['p'], # perth
+                                     initial_layout=qbitmap_3_to_7, optimization_level=optimization_level)
+    Anzs['A3_l_SU2_L1']  = transpile(Anzs['A3_3_SU2_L1'], backend=backends['l'], # lagos
+                                     initial_layout=qbitmap_3_to_7, optimization_level=optimization_level )
+
+    ######## Triangles #########
+    Anzs['A3_3_SU2_L2'] = EfficientSU2(3, entanglement='linear', reps=2,
+                           name='A3_3_SU2_L2',skip_final_rotation_layer=True).decompose()
+    ### 5 qubits
+    Anzs['A3_a_SU2_L2']  = transpile(Anzs['A3_3_SU2_L2'], backend=backends['a'], # lima
+                                     initial_layout=qbitmap_3_to_5, optimization_level=optimization_level)
+    Anzs['A3_b_SU2_L2']  = transpile(Anzs['A3_3_SU2_L2'], backend=backends['b'], # belem
+                                     initial_layout=qbitmap_3_to_5, optimization_level=optimization_level)
+    Anzs['A3_m_SU2_L2']  = transpile(Anzs['A3_3_SU2_L2'], backend=backends['m'], # manila
+                                     initial_layout=qbitmap_3_to_5, optimization_level=optimization_level)
+    Anzs['A3_q_SU2_L2']  = transpile(Anzs['A3_3_SU2_L2'], backend=backends['q'], # quito
+                                     initial_layout=qbitmap_3_to_5, optimization_level=optimization_level)
+    ### 7 qubits
+    Anzs['A3_p_SU2_L2'] = transpile(Anzs['A3_3_SU2_L2'], backend=backends['p'], # perth
+                                     initial_layout=qbitmap_3_to_7, optimization_level=optimization_level)
+    Anzs['A3_l_SU2_L2']  = transpile(Anzs['A3_3_SU2_L2'], backend=backends['l'], # lagos
+                                     initial_layout=qbitmap_3_to_7, optimization_level=optimization_level )
+
+    ######## Triangles #########
+    Anzs['A3_3_SU2_L3'] = EfficientSU2(3, entanglement='linear', reps=3,
+                           name='A3_3_SU2_L3',skip_final_rotation_layer=True).decompose()
+    ### 5 qubits
+    Anzs['A3_a_SU2_L3']  = transpile(Anzs['A3_3_SU2_L3'], backend=backends['a'], # lima
+                                     initial_layout=qbitmap_3_to_5, optimization_level=optimization_level)
+    Anzs['A3_b_SU2_L3']  = transpile(Anzs['A3_3_SU2_L3'], backend=backends['b'], # belem
+                                     initial_layout=qbitmap_3_to_5, optimization_level=optimization_level)
+    Anzs['A3_m_SU2_L3']  = transpile(Anzs['A3_3_SU2_L3'], backend=backends['m'], # manila
+                                     initial_layout=qbitmap_3_to_5, optimization_level=optimization_level)
+    Anzs['A3_q_SU2_L3']  = transpile(Anzs['A3_3_SU2_L3'], backend=backends['q'], # quito
+                                     initial_layout=qbitmap_3_to_5, optimization_level=optimization_level)
+    ### 7 qubits
+    Anzs['A3_p_SU2_L3'] = transpile(Anzs['A3_3_SU2_L3'], backend=backends['p'], # perth
+                                     initial_layout=qbitmap_3_to_7, optimization_level=optimization_level)
+    Anzs['A3_l_SU2_L3']  = transpile(Anzs['A3_3_SU2_L3'], backend=backends['l'], # lagos
+                                     initial_layout=qbitmap_3_to_7, optimization_level=optimization_level )
+
+
+
+    ########  Squares ##########
+    Anzs['Asq_4_SU2_L1'] = EfficientSU2(4, entanglement='linear', reps=1,
+                           name='Asq_4_SU2_L1',skip_final_rotation_layer=True).decompose()
+    ### 5 qubits
+    Anzs['Asq_a_SU2_L1']  = transpile(Anzs['Asq_4_SU2_L1'], backend=backends['a'], # lima
+                                     initial_layout=qbitmap_4_to_5, optimization_level=optimization_level)
+    Anzs['Asq_b_SU2_L1']  = transpile(Anzs['Asq_4_SU2_L1'], backend=backends['b'], # belem
+                                     initial_layout=qbitmap_4_to_5, optimization_level=optimization_level)
+    Anzs['Asq_m_SU2_L1']  = transpile(Anzs['Asq_4_SU2_L1'], backend=backends['m'], # manila
+                                     initial_layout=qbitmap_4_to_5, optimization_level=optimization_level)
+    Anzs['Asq_q_SU2_L1']  = transpile(Anzs['Asq_4_SU2_L1'], backend=backends['q'], # quito
+                                     initial_layout=qbitmap_4_to_5, optimization_level=optimization_level)
+    ### 7 qubits
+    Anzs['Asq_p_SU2_opt'] = transpile(Anzs['Asq_4_SU2_L1'], backend=backends['p'], # perth
+                                     initial_layout=qbitmap_4_to_7, optimization_level=optimization_level)
+    Anzs['Asq_l_SU2_L1']  = transpile(Anzs['Asq_4_SU2_L1'], backend=backends['l'], # lagos
+                                     initial_layout=qbitmap_4_to_7, optimization_level=optimization_level)
+
+
+    # Anzs['A3_SU2'] = EfficientSU2(3, entanglement='linear', reps=3,
+    #                                  name='A3_SU2',
+    #                                  skip_final_rotation_layer=True).decompose()
+    # Anzs['A3_7_SU2_opt'] = transpile(Anzs['A3_SU2'], backend=backends['7'], initial_layout=qbitmap_3_to_7)
+    # Anzs['A3_7_SU2_opt'].name = 'A3_7_SU2_opt'
+
 
     Anzs['A4_SU2'] = EfficientSU2(4, entanglement='linear', reps=3,
                                      name='A4_SU2',skip_final_rotation_layer=True).decompose()
@@ -135,6 +346,70 @@ def init_ansatze(H=None,backends=None,targets=None):
     Anzs['A4_7_SU2_opt'] = transpile(Anzs['A4_SU2'], backend=backends['7'], initial_layout=qbitmap_4_to_7)
     Anzs['A4_7_SU2_opt'].name = 'A4_7_SU2_opt'
 
+
+    Anzs['A5_5_SU2_L1'] = EfficientSU2(5, entanglement='linear', reps=1,
+                           name='A5_5_SU2_L1',skip_final_rotation_layer=True).decompose()
+    Anzs['A5_7_SU2_L1'] = transpile(Anzs['A5_5_SU2_L1'], backend=backends['7'],
+                                    initial_layout=qbitmap_5_to_7 )
+    Anzs['A5_l_SU2_L1'] = transpile(Anzs['A5_5_SU2_L1'], backend=backends['l'],
+                                    initial_layout=qbitmap_5_to_7 )
+    Anzs['A5_p_SU2_L1'] = transpile(Anzs['A5_5_SU2_L1'], backend=backends['p'],
+                                    initial_layout=qbitmap_5_to_7 )
+    Anzs['A5_n_SU2_L1'] = transpile(Anzs['A5_5_SU2_L1'], backend=backends['n'],
+                                    initial_layout=qbitmap_5_to_7 )
+    Anzs['A5_o_SU2_L1'] = transpile(Anzs['A5_5_SU2_L1'], backend=backends['o'],
+                                    initial_layout=qbitmap_5_to_7 )
+    Anzs['A5_j_SU2_L1'] = transpile(Anzs['A5_5_SU2_L1'], backend=backends['j'],
+                                    initial_layout=qbitmap_5_to_7 )
+    Anzs['A5_16_SU2_L1']= transpile(Anzs['A5_5_SU2_L1'], backend=backends['16'],
+                                    initial_layout=qbitmap_5_to_16 )
+    Anzs['A5_g_SU2_L1']= transpile(Anzs['A5_5_SU2_L1'], backend=backends['g'],
+                                    initial_layout=qbitmap_5_to_16 )
+
+    Anzs['A5_5_SU2_L2'] = EfficientSU2(5, entanglement='linear', reps=2,
+                           name='A5_5_SU2_L2',skip_final_rotation_layer=True).decompose()
+    Anzs['A5_a_SU2_L2'] = transpile(Anzs['A5_5_SU2_L2'], backend=backends['a'],
+                                    initial_layout=qbitmap_5_to_5 )
+    Anzs['A5_b_SU2_L2'] = transpile(Anzs['A5_5_SU2_L2'], backend=backends['b'],
+                                    initial_layout=qbitmap_5_to_5 )
+    Anzs['A5_m_SU2_L2'] = transpile(Anzs['A5_5_SU2_L2'], backend=backends['m'],
+                                    initial_layout=qbitmap_5_to_5 )
+    Anzs['A5_q_SU2_L2'] = transpile(Anzs['A5_5_SU2_L2'], backend=backends['q'],
+                                    initial_layout=qbitmap_5_to_5 )
+
+
+    Anzs['A5_5_SU2_L3'] = EfficientSU2(5, entanglement='linear', reps=3,
+                           name='A5_5_SU2_L3',skip_final_rotation_layer=True).decompose()
+    Anzs['A5_a_SU2_L3'] = transpile(Anzs['A5_5_SU2_L3'], backend=backends['a'],
+                                    initial_layout=qbitmap_5_to_5 )
+    Anzs['A5_b_SU2_L3'] = transpile(Anzs['A5_5_SU2_L3'], backend=backends['b'],
+                                    initial_layout=qbitmap_5_to_5 )
+    Anzs['A5_m_SU2_L3'] = transpile(Anzs['A5_5_SU2_L3'], backend=backends['m'],
+                                    initial_layout=qbitmap_5_to_5 )
+    Anzs['A5_q_SU2_L3'] = transpile(Anzs['A5_5_SU2_L3'], backend=backends['q'],
+                                    initial_layout=qbitmap_5_to_5 )
+
+    Anzs['A5_16_SU2_L1']= transpile(Anzs['A5_5_SU2_L1'], backend=backends['16'],
+                                    initial_layout=qbitmap_5_to_16 )
+    Anzs['A5_g_SU2_L1']= transpile(Anzs['A5_5_SU2_L1'], backend=backends['g'],
+                                    initial_layout=qbitmap_5_to_16 )
+    Anzs['A5_5_SU2_L3'] = EfficientSU2(5, entanglement='linear', reps=3,
+                           name='A5_5_SU2_L3',skip_final_rotation_layer=True).decompose()
+    Anzs['A5_5_SU2_L4'] = EfficientSU2(5, entanglement='linear', reps=4,
+                           name='A5_5_SU2_L4',skip_final_rotation_layer=True).decompose()
+    Anzs['A5_5_SU2_L5'] = EfficientSU2(5, entanglement='linear', reps=5,
+                           name='A5_5_SU2_L5',skip_final_rotation_layer=True).decompose()
+
+    Anzs['A7_7_SU2_L1'] = EfficientSU2(7, entanglement='linear', reps=1,
+                           name='A7_7_SU2_L1',skip_final_rotation_layer=True).decompose()
+    Anzs['A7_7_SU2_L2'] = EfficientSU2(7, entanglement='linear', reps=2,
+                           name='A7_7_SU2_L2',skip_final_rotation_layer=True).decompose()
+    Anzs['A7_7_SU2_L3'] = EfficientSU2(7, entanglement='linear', reps=3,
+                           name='A7_7_SU2_L3',skip_final_rotation_layer=True).decompose()
+    Anzs['A7_7_SU2_L4'] = EfficientSU2(7, entanglement='linear', reps=4,
+                           name='A7_7_SU2_L4',skip_final_rotation_layer=True).decompose()
+    Anzs['A7_7_SU2_L5'] = EfficientSU2(7, entanglement='linear', reps=5,
+                           name='A7_7_SU2_L5',skip_final_rotation_layer=True).decompose()
 
     Anzs['A12_SU2'] = EfficientSU2(12, entanglement='linear', reps=3,
                            name='A12_SU2',skip_final_rotation_layer=True).decompose()
@@ -154,6 +429,8 @@ def init_ansatze(H=None,backends=None,targets=None):
     Anzs['A12_16_cust1']      = transpile(Anzs['A12_cust1'], backend=backends['16'], initial_layout=qbitmap_12_to_16)
     Anzs['A12_16_cust1'].name = 'A12_16_cust1'
 
+    for key, value in Anzs.items():
+        Anzs[key].name = key
 
     # ------------------------------------------------------------------------------ #
     Alabel = 'A4_I_L3'
@@ -278,3 +555,139 @@ def init_ansatze(H=None,backends=None,targets=None):
     Anzs[Alabel].draw()
 
     return Anzs
+
+
+def stack_couplings(Anzs=None, qubits=None, Adevices=None, couplings=None,
+                    backends=None, devices=['a'], optimization_level=3,
+                    seed_transpiler=None,
+                    nNodes=3, nQubits=5, qbitmap=None, ):
+    Anzs = {} if Anzs is None else Anzs
+    Adevices = {} if Adevices is None else Adevices
+    qbitmap = list(range(nQubits)) if qbitmap is None else qbitmap
+
+    #################################### Loop through Entanglements, Reps, and Devices
+    for E, coupling in couplings.items():
+        # Anzs[f'A{nNodes}_{nNodes}_{E}_L1'] = baseQC = customAnsatz4(nNodes,qubits=None,
+        #                                     qc=None, name=f'A{nNodes}_{nNodes}_{E}_L1',
+        #                                     couplings=coupling )
+        Anzs[f'A{nNodes}_{nQubits}_{E}_L1'] = baseQC = customAnsatz4(nQubits, qc=None,qubits=qubits,
+                                             name=f'A{nNodes}_{nQubits}_{E}_L1', couplings=coupling )
+        for D in devices:
+            Anzs[f'A{nNodes}_{D}_{E}_L1'] = transpile(baseQC, backend=backends[D], initial_layout=qbitmap,
+                                                      optimization_level=optimization_level,
+                                                      seed_transpiler=seed_transpiler)
+            Adevices[f'A{nNodes}_{D}_{E}_L1'] = D
+    ####################################
+
+    for key in Anzs.keys():
+        Anzs[key].name = key
+    return Anzs, Adevices
+
+
+def local_ansatze(Anzs=None, Adevices=None,
+                  couplings={'SA1':[[0,1],[1,2],[1,3],],},
+                  reps=[2,1,],
+                  backends=None, devices=['a'],
+                  nNodes=3,nQubits=5,qbitmap=[0,1,2,], ):
+    Anzs = {} if Anzs is None else Anzs
+    Adevices = {} if Adevices is None else Adevices
+
+    #################################### Loop through Entanglements, Reps, and Devices
+    for E, coupling in couplings.items():
+        for R in reps:
+            Anzs[f'A{nNodes}_{nNodes}_{E}_L{R}'] = baseQC = customAnsatz3(nNodes,
+                                                qc=None, reps= R,
+                                                name=f'A{nNodes}_{nNodes}_{E}_L{R}',
+                                                coupling=coupling )
+            Anzs[f'A{nNodes}_{nQubits}_{E}_L{R}'] = customAnsatz3(nQubits, qc=None, reps= R,
+                                                name=f'A{nNodes}_{nQubits}_{E}_L{R}', coupling=coupling )
+            for D in devices:
+                Anzs[f'A{nNodes}_{D}_{E}_L{R}'] = transpile(baseQC, backend=backends[D], initial_layout=qbitmap)
+                Adevices[f'A{nNodes}_{D}_{E}_L{R}'] = D
+    ####################################
+
+    for key in Anzs.keys():
+        Anzs[key].name = key
+    return Anzs, Adevices
+
+def Anzs_images(Akeys=None,Anzs=None,):
+    images = {}
+    if Akeys is None or len(Akeys)<1:
+        Akeys=list(Anzs.keys())
+    for Akey in Akeys:
+        images[Akey] = Anzs[Akey].draw()
+    return images
+
+def Anzs_schedules( Akeys=None, Anzs={}, backends={} ):
+    from qiskit import schedule as build_schedule
+    (schedules,images,skip) = ({},{},'No Backend ')
+    Akeys = list(Anzs.keys()) if Akeys is None else Akeys
+    for Akey in Akeys:
+        backend = backends.get(Akey,None)
+        if backend is not None:
+            schedules[Akey] = build_schedule(Anzs[Akey],backend)
+            images[Akey] = schedules[Akey].draw(backend=backend)
+        else:
+            print(f"{skip} {Akey},", end="")
+            skip=''
+    return schedules, images
+
+def eval_schedules(schedules,devices,Akeys=None,qubits=[0,1,2,]):
+    def min_Decoherence(backend,qubits=None):
+        if qubits is None:
+            qubits = list(range(backend.configuration().n_qubits))
+        properties = backend.properties()
+        minT1=None
+        minT2=None
+        for curBit in qubits:
+            if minT1 is None or (minT1 > properties.t1(curBit)):
+                minT1 = properties.t1(curBit)
+            if minT2 is None or (minT2 > properties.t2(curBit)):
+                minT2 = properties.t2(curBit)
+        return minT1,minT2
+    def max_error_rate(backend,qubits=None):
+        if qubits is None:
+            qubits = list(range(backend.configuration().n_qubits))
+        properties = backend.properties()
+        maxRate=None
+        for curBit in qubits:
+            if maxRate is None or (maxRate < properties.readout_error(curBit)):
+                maxRate = properties.readout_error(curBit)
+        return maxRate
+    import pandas as pd
+    Akeys = list(schedules.keys()) if Akeys is None else Akeys
+    dataList = []
+    for key in Akeys:
+        dt = devices[key].configuration().dt
+        minT1,minT2=min_Decoherence(devices[key],qubits=qubits)
+        maxError = max_error_rate(devices[key],qubits=qubits)
+        duration = schedules[key].duration
+        T1_ratio = duration*dt / minT1
+        T2_ratio = duration*dt / minT2
+        T1_decay = np.exp(-1*T1_ratio)
+        T2_decay = np.exp(-1*T2_ratio)
+
+        dataList.append( [key, 100*maxError,
+                          100*T1_decay,100*T2_decay,
+                          len(schedules[key]._parameter_manager.parameters),
+                          duration*dt/ns,
+                          minT1/us, minT2/us,
+                          T1_ratio, T2_ratio ] )
+
+    columns=['Anzs','MeasErr%','T1-Decay','T2-Decay','Parms','t (ns)','T1(us)','T2(us)','t/T1','t/T2',]
+    df = pd.DataFrame(dataList, columns=columns)
+    def make_pretty(styler):
+        styler.set_caption("Schedule Evaluations")
+        styler.hide(axis="index")
+        styler.set_table_styles([dict(selector='th', props=[('text-align', 'center')])])
+        styler.format(precision=2,thousands=",")
+        styler.format(subset=['t/T1','t/T2'],precision=4)
+
+        styler.set_properties(subset=["Anzs"], **{'text-align': 'center'})
+        return styler
+    return df.style.pipe(make_pretty)
+
+ns = 1.0e-9 # Nanoseconds
+us = 1.0e-6 # Microseconds
+
+

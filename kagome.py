@@ -19,12 +19,14 @@ import pandas
 import subprocess
 import numpy as np
 from sympy import init_printing
-from time import time
+from time import time, sleep
 
 init_printing(use_latex = True )
 
 from qiskit_nature.problems.second_quantization.lattice import Lattice
 from qiskit_ibm_runtime import Options
+from qiskit_ibm_runtime import Session as RuntimeSession, Estimator as RuntimeEstimator
+
 import rustworkx         as rx
 version_info="myTools(major=1, minor=1, micro=0)"
 
@@ -174,12 +176,22 @@ def iter2str(obj,name: str = None,indent: int = 4) -> str:
 from qiskit.algorithms import MinimumEigensolver, VQEResult
 from qiskit.providers import JobError
 from qiskit_ibm_runtime.exceptions import (
+    # QiskitRuntimeError,
     RuntimeJobFailureError,
     RuntimeInvalidStateError,
     IBMRuntimeError,
     RuntimeJobTimeoutError,
     RuntimeJobMaxTimeoutError,
 )
+exceptions_to_catch =(
+    # QiskitRuntimeError,
+    RuntimeJobFailureError,
+    RuntimeInvalidStateError,
+    IBMRuntimeError,
+    RuntimeJobTimeoutError,
+    RuntimeJobMaxTimeoutError,
+    JobError,
+    )
 import numpy as np
 import matplotlib.pyplot as plt
 from qiskit.providers.jobstatus import JobStatus
@@ -201,15 +213,22 @@ class KagomeResult(VQEResult):
 
 class KagomeVQE(MinimumEigensolver):
     def __init__(self, estimator, circuit, optimizer, timeout=120, target=None,
-                label=None, miniAnsatz = None, options=None ):
+                label=None, miniAnsatz = None, options=None, forced_xdata=None ):
         self._estimator       = estimator
         self._circuit         = circuit
         self._optimizer       = optimizer
         self._options         = options
         self._timeout         = timeout
         self._target          = target
+        self._backend         = None
+        self._session         = None
+        # self._callback_data   = []
+        # self._callback_points = []
+        self._callback_fdata  = []
         self._callback_data   = []
+        self._callback_xdata  = []
         self._callback_points = []
+        self._job_results     = None
         self._resultList      = None
         self._result          = None
         self._initial_point   = None
@@ -219,6 +238,8 @@ class KagomeVQE(MinimumEigensolver):
         self._SPSA_callback_data = None
         self.attrs            = {}
         self._shots           = None
+        self._forced_xdata    = forced_xdata
+        self._xdata_idx       = 0
         if options is not None and options.get('shots',None) is not None:
             shots = options.get('shots',None)
         elif isinstance(options,Options):
@@ -235,6 +256,7 @@ class KagomeVQE(MinimumEigensolver):
         myData['_SPSA_callback_data'] = self._SPSA_callback_data
         myData['_target']             = self._target
         myData['attrs']               = self.attrs
+        myData['job_results']         = self._job_results
         return myData
 
     def from_dict(self,myData):
@@ -247,6 +269,7 @@ class KagomeVQE(MinimumEigensolver):
         self._SPSA_callback_data = myData.get('_SPSA_callback_data')
         self._target             = myData.get('_target',None)
         self.attrs               = myData.get('attrs',None)
+        self._job_results         = myData.get('job_results',None)
 
     def _callback(self, value):
         self._callback_data.append(value)
@@ -306,11 +329,15 @@ class KagomeVQE(MinimumEigensolver):
     def list_result(self,prec=3):
         label = self.label.replace("\n",'')
         msg =  f"'{label}'\n"
-        msg += f"Computed: {np.around(self._result.eigenvalue,prec)}"
+        eigenvalue = self._result.eigenvalue if self._result is not None else None
+        if eigenvalue is not None:
+            msg += f"Computed: {np.around(self._result.eigenvalue,prec)}"
         results = parse_SPSA_callback(self.SPSA_callback_data)
-        minVal = np.min(results['Fa'])
-        msg += f" Min {np.around(minVal,prec)}"
-        if self._target is not None:
+        fdata = results.get('Fa', None)
+        if fdata is not None and len(fdata) > 0:
+            minVal = np.min(fdata)
+            msg += f" Min {np.around(minVal,prec)}"
+        if self._target is not None and eigenvalue is not None:
             min_error = abs((self._target - minVal) / self._target)
             rel_error = abs((self._target - self._result.eigenvalue) / self._target)
             msg += f" Target {np.around(self.target,prec)}"
@@ -352,39 +379,44 @@ class KagomeVQE(MinimumEigensolver):
             resultsList.append(self)
         return self._result
 
-    def compute_minimum_eigenvalue(self, operators, aux_operators=None, x0=None):
-
+    def compute_minimum_eigenvalue(self, operators, aux_operators=None, x0=None, max_tries=5):
         # Define objective function to classically minimize over
         def objective(x):
             # Execute job with estimator primitive
-            try_count = 0
-            job_result = None
-            start = time()
-            while (job_result is None) and (try_count < 2):
-                try_count += 1
-                jobId = 'UNK'
+            (try_count,job_result,start) = (0,None,time())
+            while (job_result is None) and (try_count < max_tries):
+                try_count+=1
+                (jobID, job_status) = ('UNK', None )
                 try:
                     job = self._estimator.run([self._circuit], [operators], [x])
                     jobId = job.job_id()
+                    job_result = job.result()
                     job_status = job.status()
-                    if (job_status is not JobStatus.DONE) and (job_status not in _runningJobs):
-                        print(f"Job:{jobId} Try:{try_count} Status:{job_status} T:{time()-start}sec")
-                    elif self._timeout is not None:
-                        job_result = job.result(timeout=self._timeout)
-                    else:
+                    while (job_status in _runningJobs) and (try_count < max_tries):
+                        duration = formatDuration(time()-start)
+                        print(f"\nWAIT Job:{jobId} Status:{job_status} Try:{try_count} T:{duration}\n")
+                        sleep(60)  # Avoid tight loop
                         job_result = job.result()
+                        job_status = job.status()
+                        if job_status is not JobStatus.DONE:
+                            try_count+=1
 
-                except (JobError, RuntimeJobTimeoutError) as ex:
-                    print(f"cur Job:{jobId} Try:{try_count} Status:{job_status} T:{time()-start} sec")
-                    print(f"Job {jobId} Try {try_count} Error {ex}")
-                    if try_count < 2:
+                except exceptions_to_catch as ex:
+                    job_status = 'Unknown' if job_status is None else job_status
+                    duration = formatDuration(time()-start)
+                    print(f"\nERROR cur Job:{jobId} Status:{job_status} Try:{try_count} T:{duration}\n")
+                    if try_count < max_tries:
+                        if job_status == 'Unknown':
+                            print(f"\nSESSION Job {jobID} New RuntimeSession\n")
+                            session = RuntimeSession(service=self._service, backend=self._backend)
+                            self._estimator = RuntimeEstimator(session=session,
+                                                               options=self._options)
                         pass
                     else:
-                        print(f"Job {jobId} Try {try_count} Error {ex} Re-Raise")
+                        print(f"\nERROR RETRIES Job {jobId} Try {try_count} Error {ex} Re-Raise\n")
                         raise
 
-            # Get the measured energy value
-            value = job_result.values[0]
+            value = None if job_result is None else job_result.values[0]
             # Save result information
             self._callback_data.append(value)
             self._callback_points.append(x)
@@ -399,20 +431,29 @@ class KagomeVQE(MinimumEigensolver):
         self._initial_point = x0
 
         result = VQEResult()
-
+        res = None
         # Run optimization
         start = time()
-        res = self._optimizer.minimize(objective, x0=x0)
+        try:
+            res = self._optimizer.minimize(objective, x0=x0)
+        except Exception as ex:
+            print(f"Exception {type(ex)} ")
+            # ex.printStackTrace()
+            pass
+
         result.optimizer_time = time()-start
+        if res is not None:
+            result.cost_function_evals = res.nfev
+            result.eigenvalue = res.fun
+            result.optimal_parameters = res.x
+            result.optimizer_result = res
+        else:
+            result.cost_function_evals = 0
+            result.eigenvalue = 0
+            result.optimal_parameters = None
+            result.optimizer_result = None
 
-        # Populate VQE result
-        result.cost_function_evals = res.nfev
-        result.eigenvalue = res.fun
-        result.optimal_parameters = res.x
-        result.optimizer_result = res
         result.optimal_point = np.array(self._callback_data)
-
-        # Update Custom VQE Data
         self._result = result
         return result
 
@@ -432,18 +473,23 @@ class KagomeVQE(MinimumEigensolver):
              Manage the data generated for each test run
     ################################################################ """
 def getX0(p_idx,curCache,last=False):
-    if isinstance(p_idx,int) and (p_idx > 0) and (p_idx <= len(curCache)):
-        spsa_data = parse_SPSA_callback(curCache[p_idx])
+    expVal = None
+    if isinstance(p_idx,int) and (p_idx >= 0) and (p_idx <= len(curCache)):
+        spsa_data = parse_SPSA_callback(curCache[p_idx].SPSA_callback_data)
         Fdata = spsa_data['Fa']
+        Xdata = spsa_data['Xa']
         if last:
-            x0 = Fdata[-1]
+            x0 = Xdata[-1]
+            expVal = Fdata[-1]
         else:
-            x0 = Fdata[np.argmin(Fdata)]
+            idx = np.argmin(Fdata)
+            x0 = Xdata[idx]
+            expVal = Fdata[idx]
     elif isinstance(p_idx,str) and (p_idx == '0'):
         x0 = 0
     else:
         x0 = None
-    return x0
+    return x0, expVal
 
 def list_results(data_cache, reverse=False):
     """ Display overview of result data cache
@@ -484,15 +530,20 @@ def load_results(fname):
     return results
 
 def load_object(fname):
-    import pickle
-    with open(fname, 'rb') as obj_file:
-        obj = pickle.load(obj_file)
-    return obj
+    import pickle, os.path
+    if os.path.isfile(fname):
+        with open(fname, 'rb') as obj_file:
+            obj = pickle.load(obj_file)
+            obj_file.close()
+            return obj
 
 def save_object(obj,fname):
     import pickle
-    with open(fname, 'wb') as obj_file:
-        pickle.dump(obj, obj_file)
+    if obj is not None:
+        with open(fname, 'wb') as obj_file:
+            pickle.dump(obj, obj_file)
+            obj_file.close()
+
 
 def save_results(data_cache,fname):
     """ Save a copy of the results data cache
@@ -550,7 +601,7 @@ def plot_SPSA_convergence(curCache,indices=[-1],
                      conv_lim = 0.035,
                      movingAvg=5,perc=6,
                      scatter_xlim=(0,0.14),
-                     convergence=True,
+                     convergence=False,
                      minStart=20):
     figsize=(8.5,6)
     fignum=1
@@ -563,14 +614,16 @@ def plot_SPSA_convergence(curCache,indices=[-1],
                                                     mavg=movingAvg,
                                                     target=target)
         # ==== Check for convergence and plot ====
-        conv_idx = get_convergence_index(list(np.abs(parsed_data['avgSlopes'])),
-                                         conv_lim=conv_lim,conv_ctr=5,offset=movingAvg)
-        if conv_idx is not None:
-            print(f"Convergence({conv_lim}) at {conv_idx} "
-                  f"Fx={np.around(parsed_data['Fa'][conv_idx],perc)} "
-                  f"{np.around(parsed_data['percErr'][conv_idx],perc)} % \n")
-        else:
-            print(f"Convergence Failure")
+        conv_idx=None
+        if convergence:
+            conv_idx = get_convergence_index(list(np.abs(parsed_data['avgSlopes'])),
+                                             conv_lim=conv_lim,conv_ctr=5,offset=movingAvg)
+            if conv_idx is not None:
+                print(f"Convergence({conv_lim}) at {conv_idx} "
+                      f"Fx={np.around(parsed_data['Fa'][conv_idx],perc)} "
+                      f"{np.around(parsed_data['percErr'][conv_idx],perc)} % \n")
+            else:
+                print(f"Convergence Failure")
         plot_SPSA_callback(curResult,fignum=fignum,figsize=figsize,yline=conv_idx)
 
         if convergence:
@@ -604,7 +657,7 @@ def plot_SPSA_convergence(curCache,indices=[-1],
 def quick_plot(data,labels=[],
                title=None, ylim=None, yscale='linear',
                xlabel='Iteration', ylabel='Value',
-               fignum=1, figsize=None,
+               fignum=1, figsize=(8.5,6),
                colors=['black','red','purple','green']
               ):
 
@@ -682,12 +735,17 @@ def plot_SPSA_callback(obj,prec=6,fignum=1,figsize=None,yline=None):
         label = obj._label
         target = obj._target
         nshots = obj._shots
-        duration = formatDuration(obj._result.optimizer_time)
+        if hasattr(obj,'_result') and obj._result is not None:
+            duration = formatDuration(obj._result.optimizer_time)
+            eigenvalue = obj._result.eigenvalue
+        else:
+            duration = 10
+            eigenvalue = None
         spsa_data = obj.SPSA_callback_data
         if spsa_data is None or len(spsa_data) == 0:
             print("No SPSA Callback Data Available")
             return
-        eigenvalue = obj._result.eigenvalue
+
         gnd_state += f'Computed {np.around(eigenvalue,prec)} '
 
     if spsa_data is None or len(spsa_data) == 0:
@@ -697,6 +755,8 @@ def plot_SPSA_callback(obj,prec=6,fignum=1,figsize=None,yline=None):
     parsed_data = parse_SPSA_callback(spsa_data)
     Xdata, Fdata, accepts = (parsed_data['Xa'], parsed_data['Fa'], parsed_data['accepts'])
     minEig = min(Fdata)
+    if eigenvalue is None:
+        eigenvalue = minEig
     gnd_state += f"Min {np.around(minEig,prec)} "
     print(f"Duration {duration} Shots={nshots} Iterations={accepts[0]+accepts[1]} Accepted="
           f"{np.around(100*accepts[0]/(accepts[0]+accepts[1]),1)} % "
@@ -761,7 +821,7 @@ def _parse_SPSA_callback(spsa_data, data_list = ['Xa','Fa','accepts'] ):
     return return_data
 
 
-def parse_SPSA_convergence(spsa_data, mavg=5, target=None):
+def parse_SPSA_convergence(spsa_data, mavg=5, target=None, details=False):
     parsed_data = parse_SPSA_callback(spsa_data)
     Fdata = parsed_data['Fa']
     steps = parsed_data['stepSizeA']
@@ -773,7 +833,7 @@ def parse_SPSA_convergence(spsa_data, mavg=5, target=None):
         delF.append(deltaF)
         if steps[i] > 1e-10:
             slopes.append(deltaF/steps[i])
-        else:
+        elif details:
             print(f"Skipping iteration {i} with step={steps[i]}")
             slopes.append(slopes[-1])
 
@@ -802,9 +862,85 @@ def parse_SPSA_convergence(spsa_data, mavg=5, target=None):
     parsed_data['percErr'] = errs
     return parsed_data
 
+
+def try_estimator(estimator, A, H, x, retries=2):
+    # Execute job with estimator primitive
+    (job_result, try_count, start) = (None, 0, time())
+
+    while (job_result is None) and (try_count < retries):
+        try_count += 1
+        jobId = 'UNK'
+        try:
+            job = estimator.run(A, H, x)
+            jobId = job.job_id()
+            job_status = job.status()
+            if (job_status is not JobStatus.DONE) and (job_status not in _runningJobs):
+                print(f"Job:{jobId} Try:{try_count} Status:{job_status} T:{time()-start}sec")
+            else:
+                job_result = job.result()
+
+        except exceptions_to_catch as ex:
+            print(f"cur Job:{jobId} Try:{try_count} Status:{job_status} T:{time()-start} sec")
+            print(f"Job {jobId} Try {try_count} Error {ex}")
+            if try_count < retries:
+                pass
+            else:
+                print(f"Job {jobId} Try {try_count} Error {ex} Re-Raise")
+                raise
+
+    return job_result
+
+def run_comparison(estimator, H, A, forced_xdata,
+                   service=None, backend=None, label=None,
+                   options=None ):
+    from qiskit.primitives import Estimator
+    from qiskit_ibm_runtime import Session, Options, Estimator as RuntimeEstimator
+
+    (job_results,fdata,start_time) = ([],[],time())
+    if label is None:
+        label = f"Comparison"
+    init_SPSA_callback()
+    H = H if isinstance(H,list) else [H]
+    A = A if isinstance(A,list) else [A]
+    if service is None:
+        if backend is None:
+            estimator = Estimator(A, H, options=options )
+        else:
+            from qiskit.primitives import BackendEstimator
+            estimator = BackendEstimator(backend, skip_transpilation=False,
+                                         options=options)
+        for curX in forced_xdata:
+            job_result = try_estimator(estimator, A, H, [curX])
+            if job_result is not None:
+                fdata.append(job_result.values[0])
+                job_results.append(job_result)
+            else:
+                raise JobError("Null Job Returned")
+    else:
+        if options is None:
+            print(f"Default Options")
+            options = Options()
+        else:
+            print(f"Provided Options")
+        with Session(service=service, backend=backend) as session:
+            label += f" {backend} "
+            print(label)
+            estimator = RuntimeEstimator(session=session, options=options)
+            for curX in forced_xdata:
+                job_result = try_estimator(estimator,A, H, [curX])
+                if job_result is not None:
+                    fdata.append(job_result.values[0])
+                    job_results.append(job_result)
+                else:
+                    raise JobError("Null Job Returned")
+
+    print(f"Runtime {formatDuration(time() - start_time)}")
+    return fdata, job_results
+
+
 def run_kagomeVQE(H, ansatz, optimizer, timeout=120, x0=None, target = None,
                  resultsList=None, service=None, backend=None, label=None,
-                 miniAnsatz=None, options=None):
+                 miniAnsatz=None, options=None, forced_xdata=None):
     """ Run the eigenvalue search
             Args:
                 H (SparsePauliSum): The Hamiltonian
@@ -838,8 +974,17 @@ def run_kagomeVQE(H, ansatz, optimizer, timeout=120, x0=None, target = None,
             print(label)
             kagomeVQE = KagomeVQE(estimator, ansatz, optimizer,
                                    timeout=None, target=target, label=label,
-                                   miniAnsatz=miniAnsatz )
-            result = kagomeVQE.compute_minimum_eigenvalue(H,x0=x0)
+                                   miniAnsatz=miniAnsatz, forced_xdata=forced_xdata )
+            if forced_xdata is None:
+                result = kagomeVQE.compute_minimum_eigenvalue(H,x0=x0)
+            else:
+                print(f"Running a forced data set on Local")
+                result, job_results = run_comparison(estimator, H, ansatz, forced_xdata,
+                                        service=None, backend=None, label=label,
+                                        options=options,)
+                kagomeVQE._callback_points = forced_xdata
+                kagomeVQE._callback_data = result
+                kagomeVQE._job_results = job_results
         else:
             from qiskit.primitives import BackendEstimator
             estimator = BackendEstimator(backend, skip_transpilation=False,
@@ -847,8 +992,17 @@ def run_kagomeVQE(H, ansatz, optimizer, timeout=120, x0=None, target = None,
             print(label)
             kagomeVQE = KagomeVQE(estimator, ansatz, optimizer,
                                   timeout=None, target=target, label=label,
-                                  miniAnsatz=miniAnsatz )
-            result = kagomeVQE.compute_minimum_eigenvalue(H,x0=x0)
+                                  miniAnsatz=miniAnsatz, forced_xdata=forced_xdata )
+            if forced_xdata is None:
+                result = kagomeVQE.compute_minimum_eigenvalue(H,x0=x0)
+            else:
+                print(f"Running a forced data set on Local Simulator")
+                result, job_results = run_comparison(estimator, H, ansatz, forced_xdata,
+                                             service=service, backend=backend, label=label,
+                                             options=options,)
+                kagomeVQE._callback_points = forced_xdata
+                kagomeVQE._callback_data = result
+                kagomeVQE._job_results = job_results
     else:
         from qiskit_ibm_runtime import Session, Options, Estimator as RuntimeEstimator
         if options is None:
@@ -863,8 +1017,19 @@ def run_kagomeVQE(H, ansatz, optimizer, timeout=120, x0=None, target = None,
             # , options=options)
             kagomeVQE = KagomeVQE(estimator, ansatz, optimizer,
                                   timeout=None, target=target, label=label,
-                                  miniAnsatz=miniAnsatz)
-            result = kagomeVQE.compute_minimum_eigenvalue(H,x0=x0)
+                                  miniAnsatz=miniAnsatz, forced_xdata=forced_xdata)
+            if forced_xdata is None:
+                kagomeVQE._backend = backend
+                kagomeVQE._service = service
+                result = kagomeVQE.compute_minimum_eigenvalue(H,x0=x0)
+            else:
+                print(f"Running a forced data set on RunTime Simulator")
+                result, job_results = run_comparison(estimator, H, ansatz, forced_xdata,
+                                             service=service, backend=backend, label=label,
+                                             options=options,)
+                kagomeVQE._callback_points = forced_xdata
+                kagomeVQE._callback_data = result
+                kagomeVQE._job_results = job_results
 
     if resultsList is not None:
         resultsList.append(kagomeVQE)
@@ -872,7 +1037,8 @@ def run_kagomeVQE(H, ansatz, optimizer, timeout=120, x0=None, target = None,
     kagomeVQE.SPSA_callback_data = get_SPSA_callback().copy()
     kagomeVQE.H = H
 
-    print(f"Runtime {formatDuration(result.optimizer_time)}")
+    if hasattr(result,'optimizer_time'):
+        print(f"Runtime {formatDuration(result.optimizer_time)}")
     return kagomeVQE
 
 
@@ -964,3 +1130,128 @@ def strtime(epoch=None):
 
 if __name__ == "__main__":
     verstr = getVersion(output=True)
+
+def setup_devices(max_parallel=3):
+    from qiskit_ibm_runtime import (QiskitRuntimeService, Session, Options,
+                                    Estimator as RuntimeEstimator)
+    from qiskit_aer import AerSimulator, StatevectorSimulator
+
+    from qiskit.providers.fake_provider import FakeGuadalupe
+
+    svectorSim   = StatevectorSimulator(max_parallel_experiments=max_parallel)
+
+    providerV0 = get_provider(channel='ibm_quantum',
+                                            hub='ibm-q', group='open', project='main',
+                                            compatible=True,
+                                            output=True,   # Print out the available backends
+                                           )
+
+
+    # 16 qubit
+    guadalupeSim = AerSimulator(max_parallel_experiments=max_parallel).from_backend(FakeGuadalupe())
+
+    ###### ibm Version Compatible backends ##########################
+    # 5 qubit H/W
+    belemV0            = providerV0.get_backend('ibmq_belem')
+    limaV0             = providerV0.get_backend('ibmq_lima')
+    manilaV0           = providerV0.get_backend('ibmq_manila')
+    quitoV0            = providerV0.get_backend('ibmq_quito')
+    # 7 qubit H/W
+    nairobiV0          = providerV0.get_backend('ibm_nairobi')
+    osloV0             = providerV0.get_backend('ibm_oslo')
+    jakartaV0          = providerV0.get_backend('ibmq_jakarta')
+    perthV0            = providerV0.get_backend('ibm_perth')
+    lagosV0            = providerV0.get_backend('ibm_lagos')
+    backendsV0 = {'5':belemV0,  '7':osloV0, '16':guadalupeSim,
+                  'm':manilaV0, 'q':quitoV0, 'a':limaV0, 'b':belemV0,
+                  'j':jakartaV0,'o':osloV0,  'l':lagosV0,
+                  'n':nairobiV0,'p':perthV0,
+                  'g':FakeGuadalupe(),}
+
+
+    #################### Runtime API Backends ###################################
+    provider,service = get_provider(channel='ibm_quantum',
+                                            hub='ibm-q', group='open', project='main',
+                                            compatible=False,
+                                            output=True,   # Print out the available backends
+                                           )
+    backends_runtime = {'5':'ibmq_belem',  '7':'oslo',
+                        'm':'ibmq_manila', 'q':'ibmq_quito', 'a':'ibmq_lima', 'b':'ibmq_belem',
+                        'j':'ibmq_jakarta','o':'ibm_oslo',  'l':'ibm_lagos',
+                        'n':'ibm_nairobi','p':'ibm_perth',
+                        'g':'ibmq_guadalupe',}
+    # 5 qubit H/W
+    belem            = provider.get_backend('ibmq_belem')
+    lima             = provider.get_backend('ibmq_lima')
+    manila           = provider.get_backend('ibmq_manila')
+    quito            = provider.get_backend('ibmq_quito')
+    # 7 qubit H/W
+    nairobi          = provider.get_backend('ibm_nairobi')
+    oslo             = provider.get_backend('ibm_oslo')
+    jakarta          = provider.get_backend('ibmq_jakarta')
+    perth            = provider.get_backend('ibm_perth')
+    lagos            = provider.get_backend('ibm_lagos')
+
+    backends = {'5':belem,  '7':oslo, '16':guadalupeSim,
+                'm':manila, 'q':quito, 'a':lima, 'b':belem,
+                'j':jakarta,'o':oslo,  'l':lagos,
+                'n':nairobi,'p':perth,
+                'g':guadalupeSim,}
+
+
+    # 5qubit
+    belemSim     = AerSimulator(max_parallel_experiments=max_parallel).from_backend(belem)
+    limaSim      = AerSimulator(max_parallel_experiments=max_parallel).from_backend(lima)
+    quitoSim     = AerSimulator(max_parallel_experiments=max_parallel).from_backend(quito)
+    manilaSim    = AerSimulator(max_parallel_experiments=max_parallel).from_backend(manila)
+
+    # 7 qubit
+    nairobiSim   = AerSimulator(max_parallel_experiments=max_parallel).from_backend(nairobi)
+    osloSim      = AerSimulator(max_parallel_experiments=max_parallel).from_backend(oslo)
+    jakartaSim   = AerSimulator(max_parallel_experiments=max_parallel).from_backend(jakarta)
+    perthSim     = AerSimulator(max_parallel_experiments=max_parallel).from_backend(perth)
+    lagosSim     = AerSimulator(max_parallel_experiments=max_parallel).from_backend(lagos)
+
+    simulators = {'m':manilaSim,    'q':quitoSim, 'a':limaSim, 'b':belemSim,
+                  'j':jakartaSim,   'o':osloSim,  'l':lagosSim,
+                  'n':nairobiSim,   'p':perthSim,
+                  'g':guadalupeSim,
+                 }
+    print(f"Hardware Setup Complete")
+    return provider, service, backends, simulators, backendsV0, backends_runtime
+
+def init_optimizers():
+    optimizers={}
+    from qiskit.algorithms.optimizers import SPSA
+    optimizers['00'] = {'opt': SPSA(maxiter=5), 'label':'SPSA(5)' }
+    optimizers['01'] = {'opt': SPSA(maxiter=75), 'label':'SPSA(75)' }
+    optimizers['02'] = {'opt': SPSA(maxiter=75,callback=SPSA_callback),
+                        'label':'SPSA(75,cb)' }
+    optimizers['03'] = {'opt': SPSA(maxiter=75,callback=SPSA_callback,blocking=True),
+                        'label':'SPSA(75,cb,block)' }
+    optimizers['04'] = {'opt': SPSA(maxiter=150,callback=SPSA_callback),
+                        'label':'SPSA(150,cb)' }
+    optimizers['05'] = {'opt': SPSA(maxiter=150,callback=SPSA_callback,blocking=True),
+                        'label':'SPSA(150,cb,block)' }
+    optimizers['06'] = {'opt': SPSA(maxiter=300,callback=SPSA_callback),
+                        'label':'SPSA(300,cb)' }
+    optimizers['07'] = {'opt': SPSA(maxiter=300,callback=SPSA_callback,blocking=True),
+                        'label':'SPSA(300,cb,block)' }
+    optimizers['08'] = {'opt': SPSA(maxiter=150,callback=SPSA_callback,trust_region=True),
+                        'label':'SPSA(150,cb,trust)' }
+    optimizers['09'] = {'opt': SPSA(maxiter=300,callback=SPSA_callback,trust_region=True),
+                        'label':'SPSA(300,cb,trust)' }
+    optimizers['10'] = {'opt': SPSA(maxiter=300,callback=SPSA_callback,second_order=True),
+                        'label':'SPSA(300,cb,O(2)' }
+    optimizers['11'] = {'opt': SPSA(maxiter=100,callback=SPSA_callback),
+                        'label':'SPSA(100,cb)' }
+    optimizers['12'] = {'opt': SPSA(maxiter=100,callback=SPSA_callback,trust_region=True),
+                        'label':'SPSA(100,cb,trust)' }
+    optimizers['13'] = {'opt': SPSA(maxiter=350,callback=SPSA_callback),
+                        'label':'SPSA(350,cb)' }
+    optimizers['14'] = {'opt': SPSA(maxiter=200,callback=SPSA_callback),
+                        'label':'SPSA(200,cb)' }
+    optimizers['15'] = {'opt': SPSA(maxiter=100,callback=SPSA_callback),
+                        'label':'SPSA(100,cb)' }
+    return optimizers
+

@@ -18,6 +18,7 @@
 from qiskit import QuantumCircuit
 from qiskit.quantum_info import Operator, Statevector
 from qiskit.visualization import plot_bloch_multivector
+import numpy as np
 
 def qc2Statevector(qc):
     from qiskit import Aer
