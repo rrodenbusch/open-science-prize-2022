@@ -145,7 +145,7 @@ def BoundaryCondition(qbits,K,num_qubits):
     H = PauliSumOp(op)
     return H
 
-def init_hamiltonians(cells=None, force=False, k=64, display=None):
+def init_hamiltonians(cells=None, force=False, k=64, display=None, fname='data/eigenvalues.dump'):
     hams = {}
     # hams['12_12']  = get_hamiltonian(cells['12_12'])
     hams['12_16']  = get_hamiltonian(cells['12_16'])
@@ -196,10 +196,10 @@ def init_hamiltonians(cells=None, force=False, k=64, display=None):
     hams['4_12_BC1'] = hams['4_12'] + H4_12_BCS_C1
     cells['4_12_BC1'] = cells['4_12']
 
-    eigenvalue_results = {} if force else kagome.load_object('eigenvalues.dump')
+    eigenvalue_results = {} if force else kagome.load_object(fname)
     eigenvalue_results=compute_eigenvalues(hams,k=k,force=force,prev_results=eigenvalue_results)
     targets = list_eigenvalues(eigenvalue_results,cells,display=display)
-    kagome.save_object(eigenvalue_results,'eigenvalues.dump')
+    kagome.save_object(eigenvalue_results,fname)
 
     return hams, eigenvalue_results, targets
 
