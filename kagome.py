@@ -53,9 +53,11 @@ def create_lattice(numNodes,edges):
 
 def draw_lattice(lattice,positions=None,
                  with_labels=True,font_color='white',
-                 node_color='purple'):
+                 node_color='purple', edge_color=None):
     style={'with_labels':with_labels, 'font_color':font_color,
            'node_color':node_color, }
+    if edge_color is not None:
+        style['edge_color'] = edge_color
     if positions is not None:
         style['pos']=positions
     lattice.draw(style=style)
@@ -1253,5 +1255,7 @@ def init_optimizers():
                         'label':'SPSA(200,cb)' }
     optimizers['15'] = {'opt': SPSA(maxiter=100,callback=SPSA_callback),
                         'label':'SPSA(100,cb)' }
+    optimizers['16'] = {'opt': SPSA(maxiter=500,callback=SPSA_callback),
+                        'label':'SPSA500,cb)' }
     return optimizers
 

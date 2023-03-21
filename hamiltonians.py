@@ -34,9 +34,15 @@ edges_5_16 = [(0,1,t), (0,2,t), (1,2,t), (1,7,t), (1,4,t), (7,4,t) ]
 # edges_7 = [(0,1,t), (0,2,t), (1,2,t), (1,7,t), (1,4,t), (7,4,t), (4,5,t), (4,6,t), ]
 # edges_7 = [ (0, 1, t), (0, 2, t), (2, 1, t), (1, 3, t), (1, 4, t),  (3, 4, t),
 #             (4, 5, t), (4, 6, t), (5,6,t) ]
-edges_12_16 = [(1,2,t), (2,3,t), (3,5,t), (5,8,t), (8,11,t), (11,14,t),
+edges_12_16 = [(1,2,t), (2,3,t), (3,9,t), (9,8,t), (8,11,t), (11,14,t),
                (14,13,t), (13,12,t), (12,10,t), (10,7,t), (7,4,t), (4,1,t),
-               (4,2,t), (2,5,t), (5,11,t), (11,13,t), (13,10,t), (10,4,t), ]
+               (4,2,t), (2,9,t), (9,11,t), (11,13,t), (13,10,t), (10,4,t), ]
+
+edges_4_16  = [ (4,1,t),(4,2,t),(2,1,t),(2,3,t), ]
+edges_42_16 = [ (9,8,t),(9,11,t),(11,8,t),(11,14,t), ]
+edges_43_16 = [ (13,12,t),(13,10,t),(10,12,t),(10,7,t), ]
+
+edges_5_16 = [ (4,1,t),(4,2,t),(2,1,t),(2,3,t),(2,5,t),(3,5,t) ]
 
 def init_positions():
     node_pos = {}
@@ -51,9 +57,9 @@ def init_positions():
             8:[-1.8,5.1], 14:[0,6.8], 7:[1.8,0.9], 12:[1.8,5.1]}
     #================== Kagome Lattice ====================================
     node_pos['12_16'] = {1:[0,-0.8],    2:[-0.6,1],  4:[0.6,1],   10:[1.2,3],
-                         13:[0.6,5],    11:[-0.6,5],  5:[-1.2,3],   3:[-1.8,0.9],
+                         13:[0.6,5],    11:[-0.6,5], 9:[-1.2,3],   3:[-1.8,0.9],
                          8:[-1.8,5.1], 14:[0,6.8],   7:[1.8,0.9], 12:[1.8,5.1],
-                         0:[-1.0,-1.8],   6:[-0.75,-1.8], 9:[-0.5,-1.8], 15:[-0.25,-1.8], }
+                         0:[-1.0,-1.8],   6:[-0.75,-1.8], 5:[-0.5,-1.8], 15:[-0.25,-1.8], }
     node_pos['12_12'] = {0:base[13], 1:base[10], 2:base[12], 3:base[7],
                          4:base[4],  5:base[2],  6:base[1],  8:base[5],
                          7:base[3], 10:base[8],  9:base[11], 11:base[14]}
@@ -73,6 +79,18 @@ def init_positions():
                        4:extras[0], }
     node_pos['4_7'] = {0:base[13], 1:base[10], 2:base[12], 3:base[7],
                        4:extras[0], 5:extras[1], 6:extras[2] }
+    node_pos['4_16'] = {1:[0,-0.8],    2:[-0.6,1],  4:[0.6,1],   10:[1.2,3],
+                         13:[0.6,5],    11:[-0.6,5],  9:[-1.2,3],   3:[-1.8,0.9],
+                         8:[-1.8,5.1], 14:[0,6.8],   7:[1.8,0.9], 12:[1.8,5.1],
+                         0:[-1.0,-1.8],   6:[-0.75,-1.8], 5:[-0.5,-1.8], 15:[-0.25,-1.8], }
+    node_pos['42_16'] = {1:[0,-0.8],    2:[-0.6,1],  4:[0.6,1],   10:[1.2,3],
+                         13:[0.6,5],    11:[-0.6,5],  9:[-1.2,3],   3:[-1.8,0.9],
+                         8:[-1.8,5.1], 14:[0,6.8],   7:[1.8,0.9], 12:[1.8,5.1],
+                         0:[-1.0,-1.8],   6:[-0.75,-1.8], 5:[-0.5,-1.8], 15:[-0.25,-1.8], }
+    node_pos['43_16'] = {1:[0,-0.8],    2:[-0.6,1],  4:[0.6,1],   10:[1.2,3],
+                         13:[0.6,5],    11:[-0.6,5],  9:[-1.2,3],   3:[-1.8,0.9],
+                         8:[-1.8,5.1], 14:[0,6.8],   7:[1.8,0.9], 12:[1.8,5.1],
+                         0:[-1.0,-1.8],   6:[-0.75,-1.8], 5:[-0.5,-1.8], 15:[-0.25,-1.8], }
     #==================   Double Triangle Node  ============================
     node_pos['5_5'] = {0:base[13], 1:base[10], 2:base[12], 3:base[7],
                        4:base[4], }
@@ -83,10 +101,10 @@ def init_positions():
     node_pos['5_12'] = {0:base[13], 1:base[10], 2:base[12], 3:base[7], 4:base[4],
                         5:extras[1],  6:extras[2], 8:extras[3],
                         7:extras[4], 10:extras[5], 9:extras[6], 11:extras[7], }
-    node_pos['5_16'] = {0:base[13],    1:base[10],   2:base[12],   7:base[7],  4:base[4],
-                        3:extras[0],   5:extras[1],  6:extras[2],  8:extras[3],
-                        9:extras[4],  10:extras[5], 11:extras[6], 12:extras[7],
-                        13:extras[8], 14:extras[9], 15:extras[10], }
+    node_pos['5_16'] = {1:[0,-0.8],    2:[-0.6,1],  4:[0.6,1],   10:[1.2,3],
+                         13:[0.6,5],    11:[-0.6,5],  5:[-1.2,3],   3:[-1.8,0.9],
+                         8:[-1.8,5.1], 14:[0,6.8],   7:[1.8,0.9], 12:[1.8,5.1],
+                         0:[-1.0,-1.8],   6:[-0.75,-1.8], 9:[-0.5,-1.8], 15:[-0.25,-1.8], }
 
     return node_pos
 
@@ -106,6 +124,10 @@ def init_cells():
     cells['4_5']  = kagome.create_lattice(5,edges_4)
     cells['4_7']  = kagome.create_lattice(7,edges_4)
     cells['4_12'] = kagome.create_lattice(12,edges_4)
+    
+    cells['4_16']  = kagome.create_lattice(16,edges_4_16)
+    cells['42_16']  = kagome.create_lattice(16,edges_42_16)
+    cells['43_16']  = kagome.create_lattice(16,edges_43_16)
 
     cells['5_5']  = kagome.create_lattice(5, edges_5)
     cells['5_7']  = kagome.create_lattice(7, edges_5_7)
@@ -150,7 +172,6 @@ def init_hamiltonians(cells=None, force=False, k=64, display=None, fname='data/e
     # hams['12_12']  = get_hamiltonian(cells['12_12'])
     hams['12_16']  = get_hamiltonian(cells['12_16'])
 
-
     ##### Triangles
     hams['3_3']    = get_hamiltonian(cells['3_3'])
     hams['3_5']    = get_hamiltonian(cells['3_5'])
@@ -167,6 +188,21 @@ def init_hamiltonians(cells=None, force=False, k=64, display=None, fname='data/e
     hams['4_5']    = get_hamiltonian(cells['4_5'])
     hams['4_7']    = get_hamiltonian(cells['4_7'])
     hams['4_12']   = get_hamiltonian(cells['4_12'])
+    ##   4_16
+    hams['4_16']   = get_hamiltonian(cells['4_16'])
+    H4_16_BCS_C1 = BoundaryCondition([2,4],I,16) + BoundaryCondition([3,4],I,16)
+    hams['4_16_BC1'] = hams['4_16'] + H4_16_BCS_C1
+    cells['4_16_BC1'] = cells['4_16']    
+    ## 42_16
+    hams['42_16']   = get_hamiltonian(cells['42_16'])
+    H41_16_BCS_C1 = BoundaryCondition([11,9],I,16) + BoundaryCondition([14,9],I,16)
+    hams['42_16_BC1'] = hams['42_16'] + H41_16_BCS_C1
+    cells['42_16_BC1'] = cells['42_16']    
+    ## 43_16
+    hams['43_16']   = get_hamiltonian(cells['43_16'])    
+    H42_16_BCS_C1 = BoundaryCondition([7,13],I,16) + BoundaryCondition([10,13],I,16)
+    hams['43_16_BC1'] = hams['43_16'] + H42_16_BCS_C1
+    cells['43_16_BC1'] = cells['43_16']    
 
     hams['5_5']    = get_hamiltonian(cells['5_5'])
     hams['5_7']    = get_hamiltonian(cells['5_7'])
@@ -195,6 +231,7 @@ def init_hamiltonians(cells=None, force=False, k=64, display=None, fname='data/e
     H4_12_BCS_C1 = BoundaryCondition([0,1],I,12) + BoundaryCondition([3,0],I,12)
     hams['4_12_BC1'] = hams['4_12'] + H4_12_BCS_C1
     cells['4_12_BC1'] = cells['4_12']
+
 
     eigenvalue_results = {} if force else kagome.load_object(fname)
     eigenvalue_results=compute_eigenvalues(hams,k=k,force=force,prev_results=eigenvalue_results)

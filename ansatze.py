@@ -29,10 +29,11 @@ qbitmap_3_to_7   = [0,1,2]      # nairobi oslo lagos perth jakarta
 qbitmap_4_to_4   = [0,1,2,3]
 qbitmap_4_to_5   = [0,1,2,3]
 qbitmap_4_to_7   = [0,1,2,3]
+qbitmap_4_to_16  = [1,2,3,4]
 
 qbitmap_5_to_5   = [0,1,2,3,4]
 qbitmap_5_to_7   = [0,1,2,3,5]  # nairobi, oslo, jakarta, perth, lagos
-qbitmap_5_to_16  = [0,1,2,7,4]  # guadalupe
+qbitmap_5_to_16  = [1,2,3,4,5]  # guadalupe
 
 qbitmap_12_to_16 = [1, 2, 3, 5, 8, 11, 14, 13, 12, 10, 7, 4] # for guadalupe and FakeGuadalupe
 
@@ -108,8 +109,8 @@ def customAnsatz2(num_qubits,qc=None,layers=0,name='ansatz2'):
         ansatz2.cx(range(0, num_qubits-1), range(1, num_qubits))
     return ansatz2
 
-def customAnsatz3(num_qubits, qc=None, reps=3, name='ansatz3',
-                  coupling=None):
+def customAnsatz3(num_qubits, qc=None, reps=3, name='ansatz3', qubits=None,
+                  coupling=None, deltas=None, nParams=None):
     from qiskit.circuit import Parameter
     A = QuantumCircuit(num_qubits,name=name) if qc is None else qc.copy(name=name)
     num_qubits = A.num_qubits
@@ -118,45 +119,73 @@ def customAnsatz3(num_qubits, qc=None, reps=3, name='ansatz3',
         coupling = []
         for i in range(num_qubits-1):
             coupling.append([i,i+1])
-
     # print(f"Coupling {coupling}")
-    idx = 0
+    qubits = list(range(num_qubits)) if num_qubits is None else qubits
+    nParams = 2*len(qubits) if nParams is None else nParams
+    deltas = [0,0] if deltas is None else deltas
+    params = []
+    for idx in range(nParams):
+        params.append(Parameter(f'θ_{idx}'))
+
+    (cycle,pIdx) = (0,0)
     for r in range(reps):
-        for curQbit in range(num_qubits):   # Repeat rx(t) sx rx(t)
-            A.rz(Parameter(f'θ_{idx}'), curQbit)
+        for curQbit in qubits:   # Repeat rx(t) sx rx(t)
+            A.rz(params[pIdx], curQbit)
             A.sx(curQbit)
-            A.rz(Parameter(f'θ_{idx+1}'), curQbit)
-            idx += 2
+            A.rz(params[pIdx+1], curQbit)
+            pIdx += 2
+            if pIdx >= nParams:   # Reset to start of the cycle
+                cycle += 1
+                pIdx = 0
+
         for curMap in coupling:  # Add the cx for each coupled qbit
             if len(curMap) > 1:
                 A.cx(curMap[0],curMap[1])
 
     return A
 
-def customAnsatz4(num_qubits, qubits=None, qc=None, name='ansatz3',
-                  couplings=None,pIdx=0):
+def customAnsatz4(num_qubits, qubits=None, qc=None, name='ansatz4',debug=False,
+                  couplings=None,nParams=None, loops=None):
     from qiskit.circuit import Parameter
     A = QuantumCircuit(num_qubits,name=name) if qc is None else qc.copy(name=name)
     num_qubits = A.num_qubits
     qubits = list(range(num_qubits)) if qubits is None else qubits
     # Default coupling is linear, one pass (Same as 3)
     if couplings is None:
+        loops = 1
         coupling = []
         for i in range(num_qubits-1):
             coupling.append([i,i+1])
-        couplings = [coupling]
+        couplings = [ [coupling] ]
+    elif loops is None:
+        loops = 1
+        couplings = [ couplings ]
+    params = []
+    nParams = 2*len(qubits) if nParams is None else nParams
+    for pIdx in range(nParams):
+        params.append(Parameter(f"θ_{pIdx}"))
 
-    idx = pIdx
-    for cIdx in range(len(couplings)):
-        coupling=couplings[cIdx]
-        for curQbit in qubits:   # Repeat rx(t) sx rx(t)
-            A.rz(Parameter(f'θ_{idx}'), curQbit)
-            A.sx(curQbit)
-            A.rz(Parameter(f'θ_{idx+1}'), curQbit)
-            idx += 2
-        for curMap in coupling:  # Add the cx for each coupled qbit
-            if len(curMap) > 1:
-                A.cx(curMap[0],curMap[1])
+    idx = 0
+    if debug:
+        print(f"nParams {len(params)}\n{params}")
+    for curLoop in range(loops):
+        curCoupling = couplings[curLoop]
+        curQbits = qubits[curLoop]
+        if debug:
+            print(f"\tLoop {curLoop}")
+            print(f"\t\tqbits {curQbits}")
+        for coupling in curCoupling:
+            if debug:
+                print(f"\t\t\tcoupling {coupling}")
+            for curQbit in curQbits:   # Repeat rx(t) sx rx(t)
+                A.rz(params[idx], curQbit)
+                A.sx(curQbit)
+                A.rz(params[idx+1], curQbit)
+                idx = idx+2 if idx+3 < nParams else 0
+                
+            for curMap in coupling:  # Add the cx for each coupled qbit
+                if len(curMap) > 1:
+                    A.cx(curMap[0],curMap[1])
 
     return A
 
@@ -559,8 +588,8 @@ def init_ansatze(H=None,backends=None,targets=None,optimization_level=1):
 
 def stack_couplings(Anzs=None, qubits=None, Adevices=None, couplings=None,
                     backends=None, devices=['a'], optimization_level=3,
-                    seed_transpiler=None,
-                    nNodes=3, nQubits=5, qbitmap=None, ):
+                    seed_transpiler=None, nParams=None,loops=1,
+                    nNodes=3, nQubits=5, qbitmap=None, debug=False ):
     Anzs = {} if Anzs is None else Anzs
     Adevices = {} if Adevices is None else Adevices
     qbitmap = list(range(nQubits)) if qbitmap is None else qbitmap
@@ -570,8 +599,8 @@ def stack_couplings(Anzs=None, qubits=None, Adevices=None, couplings=None,
         # Anzs[f'A{nNodes}_{nNodes}_{E}_L1'] = baseQC = customAnsatz4(nNodes,qubits=None,
         #                                     qc=None, name=f'A{nNodes}_{nNodes}_{E}_L1',
         #                                     couplings=coupling )
-        Anzs[f'A{nNodes}_{nQubits}_{E}_L1'] = baseQC = customAnsatz4(nQubits, qc=None,qubits=qubits,
-                                             name=f'A{nNodes}_{nQubits}_{E}_L1', couplings=coupling )
+        Anzs[f'A{nNodes}_{nQubits}_{E}_L1'] = baseQC = customAnsatz4(nQubits, qc=None, qubits=qubits,loops=loops, debug=debug,
+                                             name=f'A{nNodes}_{nQubits}_{E}_L1', couplings=coupling, nParams=nParams )
         for D in devices:
             Anzs[f'A{nNodes}_{D}_{E}_L1'] = transpile(baseQC, backend=backends[D], initial_layout=qbitmap,
                                                       optimization_level=optimization_level,
@@ -586,7 +615,7 @@ def stack_couplings(Anzs=None, qubits=None, Adevices=None, couplings=None,
 
 def local_ansatze(Anzs=None, Adevices=None,
                   couplings={'SA1':[[0,1],[1,2],[1,3],],},
-                  reps=[2,1,],
+                  reps=[2,1,], qubits=[0,1,2,],
                   backends=None, devices=['a'],
                   nNodes=3,nQubits=5,qbitmap=[0,1,2,], ):
     Anzs = {} if Anzs is None else Anzs
@@ -595,11 +624,11 @@ def local_ansatze(Anzs=None, Adevices=None,
     #################################### Loop through Entanglements, Reps, and Devices
     for E, coupling in couplings.items():
         for R in reps:
-            Anzs[f'A{nNodes}_{nNodes}_{E}_L{R}'] = baseQC = customAnsatz3(nNodes,
-                                                qc=None, reps= R,
+            Anzs[f'A{nNodes}_{nNodes}_{E}_L{R}'] = customAnsatz3(np.max(qubits)+1,
+                                                qc=None, reps= R,qubits=qubits,
                                                 name=f'A{nNodes}_{nNodes}_{E}_L{R}',
                                                 coupling=coupling )
-            Anzs[f'A{nNodes}_{nQubits}_{E}_L{R}'] = customAnsatz3(nQubits, qc=None, reps= R,
+            Anzs[f'A{nNodes}_{nQubits}_{E}_L{R}'] = baseQC = customAnsatz3(nQubits, qc=None, reps= R,qubits=qubits,
                                                 name=f'A{nNodes}_{nQubits}_{E}_L{R}', coupling=coupling )
             for D in devices:
                 Anzs[f'A{nNodes}_{D}_{E}_L{R}'] = transpile(baseQC, backend=backends[D], initial_layout=qbitmap)
